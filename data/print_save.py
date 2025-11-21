@@ -21,50 +21,44 @@ print(f"Columns: {ds.column_names}")
 
 print("Starting iteration...")
 
-from transformers import DataCollatorForLanguageModeling, AutoTokenizer
+from transformers import DataCollatorForLanguageModeling, AutoTokenizer, DataCollatorWithPadding
 from torch.utils.data import DataLoader
 
-tokenizer = AutoTokenizer.from_pretrained("gpt2")  # Replace with your model name
-
-special_langs = [f"<lang:{x}>" for x in ["en","es","ja","fr","zh","de"]]
+from transformers import GPT2TokenizerFast
+tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
 tokenizer.add_special_tokens({
     "bos_token": "<bos>",
     "eos_token": "<eos>",
-    "pad_token": "<pad>",  # this creates a token, but we must also tell HF it's the pad
-    "additional_special_tokens": ["<sep>", *special_langs]
+    "pad_token": "<pad>",
+    "additional_special_tokens": [
+        "<sep>"
+    ]
 })
-tokenizer.pad_token = "<pad>"
 
-collate_fn = DataCollatorForLanguageModeling(
-    tokenizer=tokenizer,
-    mlm=False,  # causal LM
-)
+data_collator = DataCollatorWithPadding(
+        tokenizer=tokenizer,
+        padding=True,
+        return_tensors="pt"
+    )
 
 loader = DataLoader(
     ds,
     batch_size=8,
     num_workers=12,
-    collate_fn=collate_fn
+    collate_fn=data_collator
 )
 
-import torch
 
-max_id = 0
-for batch in loader:
-    ids = batch['input_ids']
-    # convert to tensor if it's still a list
-    if not isinstance(ids, torch.Tensor):
-        ids = torch.tensor(ids, dtype=torch.long)
-    batch_max = ids.max().item()
-    if batch_max > max_id:
-        max_id = batch_max
-
-print("Max token ID in dataset:", max_id)
-
+print("Iterating through some batches...")
 for i, batch in enumerate(loader):
     print(f"Batch {i+1}: {batch['input_ids'].shape[0]} examples")
-    print(f"  Sample IDs: {batch['input_ids'][0][:20]}")  # first 20 token IDs
-    if i >= 10:
+    print(f"  Sample Input IDs: {batch['input_ids'][0]}")  
+    print(f"  Sample Input IDs Length: {len(batch['input_ids'][0])} tokens") 
+    print(f"  Sample Attention Mask: {batch['attention_mask'][0]}")  
+    print(f"  Sample Attention Mask Length: {len(batch['attention_mask'][0])} tokens")  
+    print(f"  Sample Length: {batch['attention_mask'][0].sum().item()} tokens") 
+    print(f"Decoded Sample: {tokenizer.decode(batch['input_ids'][0], skip_special_tokens=False)}")
+    if i >= 5:
         break
 
 

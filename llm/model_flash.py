@@ -69,40 +69,40 @@ class CausalSelfAttention(nn.Module):
         self.rotary = rotary_emb
 
     def forward(self, x, attn_mask=None):
-        # x: [B, T, D]
         B, T, D = x.size()
-        q = self.to_q(x).view(B, T, self.n_heads, self.head_dim)  # [B,T,H,HD]
+
+        # Projections
+        q = self.to_q(x).view(B, T, self.n_heads, self.head_dim)
         k = self.to_k(x).view(B, T, self.n_heads, self.head_dim)
         v = self.to_v(x).view(B, T, self.n_heads, self.head_dim)
 
-        # apply rotary to q,k
+        # Apply rotary embeddings (must be before SDPA)
         q = self.rotary.apply_rotary(q)
         k = self.rotary.apply_rotary(k)
 
-        # compute scaled dot-product
-        # scores: [B, H, T, T]
-        scores = torch.einsum("bthd,bThd->bh t T".replace(" ", ""), q, k) / math.sqrt(self.head_dim)
-        # Above compact fn broken on some interpreters, safer to do einsum plainly:
-        # scores = torch.einsum("bthd,bThd->bh t T", q, k) / math.sqrt(self.head_dim)
-        # but because einsum expects valid spec, use correct:
-        scores = torch.einsum("bthd,bThd->bh t T", q, k) / math.sqrt(self.head_dim)  # this may error on old einsum; fallback below if needed
+        # Permute into SDPA format
+        # SDPA expects: (B, num_heads, T, head_dim)
+        q = q.permute(0, 2, 1, 3)
+        k = k.permute(0, 2, 1, 3)
+        v = v.permute(0, 2, 1, 3)
 
-        # Build causal mask if not provided
-        if attn_mask is None:
-            # causal_mask shape: [1, 1, T, T]
-            causal = torch.tril(torch.ones((T, T), device=x.device, dtype=torch.bool))
-            causal = causal.unsqueeze(0).unsqueeze(0)
-            scores = scores.masked_fill(~causal, float("-inf"))
-        else:
-            # attn_mask expected shape [B, T] (1 for tokens to keep)
-            # convert to [B,1,1,T] then broadcast
-            am = attn_mask.view(B, 1, 1, T)
-            scores = scores.masked_fill(am == 0, float("-inf"))
+        # Prepare attention mask for SDPA (optional)
+        # If you use padding masks, expand to (B, 1, T)
+        if attn_mask is not None:
+            attn_mask = attn_mask.view(B, 1, 1, T).bool()
 
-        weights = torch.softmax(scores, dim=-1)  # [B, H, T, T]
-        out = torch.einsum("bh t T,bThd->bthd", weights, v)  # [B,T,H,HD]
-        out = out.contiguous().view(B, T, D)
+        # SDPA does causal masking internally when is_causal=True.
+        # No manual causal mask needed!
+        out = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attn_mask,
+            is_causal=True
+        )
+
+        # Back to (B, T, D)
+        out = out.permute(0, 2, 1, 3).contiguous().view(B, T, D)
         return self.to_out(out)
+
 
 class TransformerBlock(nn.Module):
     def __init__(self, d_model, n_heads, d_ff, rotary_emb):
@@ -132,9 +132,17 @@ class TinyDecoder(nn.Module):
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
 
         self.lm_head.weight = self.embed.weight
+        self._init_weights()
 
-        # optionally tie embeddings:
-        # self.lm_head.weight = self.embed.weight
+    def _init_weights(self):
+        """Initialize weights with proper scale"""
+        std = 0.02
+        nn.init.normal_(self.embed.weight, mean=0.0, std=std)
+        # Don't init lm_head.weight - it's tied to embed!
+        
+        for module in self.modules():
+            if isinstance(module, nn.Linear) and module is not self.lm_head:
+                nn.init.normal_(module.weight, mean=0.0, std=std)
 
     def forward(self, input_ids, attention_mask=None):
         # input_ids: [B, T]
@@ -144,3 +152,34 @@ class TinyDecoder(nn.Module):
         x = self.ln_f(x)
         logits = self.lm_head(x)  # [B, T, V]
         return logits
+    
+    def compute_loss(self, input_ids, attention_mask=None, labels=None):
+        """
+        Compute loss more efficiently by computing logits and loss together.
+        This can save memory compared to materializing full logits then computing loss.
+        """
+        x = self.embed(input_ids)
+        for blk in self.blocks:
+            x = blk(x, attn_mask=attention_mask)
+        x = self.ln_f(x)
+        
+        if labels is None:
+            # Inference mode - return full logits
+            return self.lm_head(x)
+        
+        # Training mode - compute loss directly
+        # Shift for next-token prediction
+        shift_hidden = x[:, :-1, :].contiguous()
+        shift_labels = labels[:, 1:].contiguous()
+        
+        # Compute logits only for non-padding positions
+        shift_logits = self.lm_head(shift_hidden)
+        
+        # Flatten for loss computation
+        loss = F.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+            ignore_index=-100  # Standard ignore index
+        )
+        
+        return loss

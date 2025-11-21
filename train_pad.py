@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
+import gc
 
 from utils import get_gpu_stats, init_gpu_monitor, count_parameters
 from torch.utils.data import DataLoader
@@ -16,28 +17,48 @@ from transformers import DataCollatorWithPadding
 # ============================================================
 # TOKENIZER (same as smoke test)
 # ============================================================
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
-
-special_langs = [f"<lang:{x}>" for x in ["en","es","ja","fr","zh","de"]]
+from transformers import GPT2TokenizerFast
+tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
 tokenizer.add_special_tokens({
     "bos_token": "<bos>",
     "eos_token": "<eos>",
     "pad_token": "<pad>",
-    "additional_special_tokens": ["<sep>", *special_langs]
+    "additional_special_tokens": [
+        "<sep>"
+    ]
 })
-tokenizer.pad_token = "<pad>"
 PAD_ID = tokenizer.pad_token_id
 
 print(f"Tokenizer vocab size: {len(tokenizer)}")
+# torch.cuda.set_per_process_memory_fraction(0.5, device=0) 
 
-# ============================================================
-# TRAINING LOOP - NEW VERSION FOR LANGUAGE MODEL
-# ============================================================
+def get_tensor_memory():
+    import gc
+    import torch
+    from collections import defaultdict
+
+    summary = defaultdict(lambda: {"count": 0, "total_mb": 0.0})
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj):
+                key = (str(obj.dtype), tuple(obj.shape), str(obj.device))
+                size_mb = obj.element_size() * obj.nelement() / 1024**2
+                summary[key]["count"] += 1
+                summary[key]["total_mb"] += size_mb
+        except Exception:
+            pass
+
+    print("\n--- Tensor Memory Summary ---")
+    for key, val in summary.items():
+        dtype, shape, device = key
+        print(f"{val['count']:3d}x {dtype} {shape} on {device}: {val['total_mb']:.2f} MB")
+    print("--- End of Summary ---\n")
+
 def train_tinydecoder_lm(
     epochs=1,
     batch_size=1,
     lr=1e-4,
-    max_seq_len=2048,
+    max_seq_len=1024,
     save_path=None
 ):
 
@@ -46,15 +67,14 @@ def train_tinydecoder_lm(
     # ----------------------------------
     print("Loading dataset...")
     ds = load_synth_shards(
-        num_shards=1,
-        base_path="/mnt/xd/ml/hf/datasets/synth_stage1_formatted/",
+        num_shards=7,
+        base_path="/mnt/xd/ml/hf/datasets/synth_stage1_formatted_padded/",
         pattern_prefix="data",
-        total_shards=7
+        total_shards=26
     )
     print(f"Loaded {len(ds)} examples")
     print(f"Columns: {ds.column_names}")
 
-    # Replace collate_fn completely
     data_collator = DataCollatorWithPadding(
         tokenizer=tokenizer,
         padding=True,
@@ -64,9 +84,9 @@ def train_tinydecoder_lm(
     loader = DataLoader(
         ds,
         batch_size=batch_size,
-        shuffle=True,
-        num_workers=8,
-        collate_fn=data_collator  # Use HuggingFace's optimized collator
+        shuffle=False,  # ✅ No shuffle for repeatability
+        num_workers=12,
+        collate_fn=data_collator
     )
 
     # ----------------------------------
@@ -76,11 +96,13 @@ def train_tinydecoder_lm(
     model = TinyDecoder(
         vocab_size=len(tokenizer),
         d_model=384,
-        n_layers=1,
+        n_layers=8,
         n_heads=8,
         d_ff=1536,
         max_seq=max_seq_len
     ).to(device)
+
+    # model.load_state_dict(torch.load("tinydecoder_lm_best.pth", map_location=device))
 
     print(model)
     count_parameters(model)
@@ -96,15 +118,11 @@ def train_tinydecoder_lm(
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
 
     # ----------------------------------
-    # Loss (LM cross-entropy)
-    # ----------------------------------
-    criterion = nn.CrossEntropyLoss(ignore_index=PAD_ID)
-
-    # ----------------------------------
     # GPU monitor
     # ----------------------------------
     gpu_handle = init_gpu_monitor()
-    get_gpu_stats(gpu_handle)  
+    get_gpu_stats(gpu_handle)
+    
     # ----------------------------------
     # Training loop
     # ----------------------------------
@@ -118,36 +136,59 @@ def train_tinydecoder_lm(
         model.train()
         running_loss = 0.0
 
+        get_tensor_memory()  # For diagnostics
         for step, batch in enumerate(loader):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
 
             optimizer.zero_grad()
 
-            logits = model(input_ids, attention_mask=attention_mask)  # [B, T, V]
-
-            # Next-token LM prediction
-            loss = criterion(
-                logits.view(-1, logits.size(-1)),
-                input_ids.view(-1)
-            )
+            loss = model.compute_loss(input_ids, attention_mask=attention_mask, labels=input_ids)
+            
+            if step % 50 == 0:
+                allocated = torch.cuda.memory_allocated(device) / 1024**3
+                reserved = torch.cuda.memory_reserved(device) / 1024**3
+                print(f"Epoch {epoch+1} Step {step} Loss: {loss.item():.4f} | "
+                      f"Mem: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved")
 
             loss.backward()
+            
+            # ✅ Clip gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             optimizer.step()
 
             running_loss += loss.item()
+            
+            # ✅ Explicit cleanup
+            del input_ids, attention_mask, loss
+            
+            # ✅ Clear cache periodically
+            if step % 100 == 0 and step > 0:
+                torch.cuda.empty_cache()
 
-            if step % 50 == 0:
-                print(
-                    f"Epoch {epoch+1} Step {step} Loss: {loss.item():.4f}"
-                )
-
-        # GPU Stats
+        # ✅ End of epoch cleanup
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        # GPU Stats (without tensor profile!)
         stats = get_gpu_stats(gpu_handle)
-        print(f"GPU Util: {stats['gpu_util']}%, Mem: {stats['mem_used']:.1f}/{stats['mem_total']:.1f} MB")
+        allocated = torch.cuda.memory_allocated(device) / 1024**3
+        reserved = torch.cuda.memory_reserved(device) / 1024**3
+        max_allocated = torch.cuda.max_memory_allocated(device) / 1024**3
+        
+        print(f"\n{'='*80}")
+        print(f"Epoch {epoch+1} Summary:")
+        print(f"  Loss: {running_loss / len(loader):.4f}")
+        print(f"  GPU Util: {stats['gpu_util']}%")
+        print(f"  Current Memory: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved")
+        print(f"  Peak Memory: {max_allocated:.2f}GB")
+        print(f"{'='*80}\n")
+        
+        # Reset peak stats
+        torch.cuda.reset_peak_memory_stats(device)
 
         epoch_loss = running_loss / len(loader)
-        print(f"Epoch {epoch+1}/{epochs} LM Loss: {epoch_loss:.4f}")
 
         # Track best
         if epoch_loss < best_loss:
@@ -171,8 +212,8 @@ def train_tinydecoder_lm(
 
 if __name__ == "__main__":
     train_tinydecoder_lm(
-        epochs=3,
-        batch_size=8,
+        epochs=4,
+        batch_size=16,
         lr=1e-4,
-        save_path="tinydecoder_lm_best.pth"
+        save_path="tinydecoder_lm_best_padded.pth"
     )

@@ -7,11 +7,9 @@ import gc
 
 from utils import get_gpu_stats, init_gpu_monitor, count_parameters
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
 
-from llm.model import TinyDecoder
+from llm.model_flash import TinyDecoder
 from data.load_shard import load_synth_shards
-from torch.nn.utils.rnn import pad_sequence
 from transformers import DataCollatorWithPadding
 
 # ============================================================
@@ -27,7 +25,6 @@ tokenizer.add_special_tokens({
         "<sep>"
     ]
 })
-PAD_ID = tokenizer.pad_token_id
 
 print(f"Tokenizer vocab size: {len(tokenizer)}")
 
@@ -101,6 +98,30 @@ def train_tinydecoder_lm(
         max_seq=max_seq_len
     ).to(device)
 
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+
+    from torch.backends.cuda import sdp_kernel
+
+    
+    # torch.backends.cuda.enable_sdpa(
+    #     kernel=SDPAKernel.flash, 
+    #     fallback=SDPAKernel.mem_efficient, 
+    # )
+
+    torch.backends.cuda.sdp_kernel(
+        enable_flash=True,
+        enable_math=False,
+        enable_mem_efficient=True,
+    )
+
+
+    # torch.backends.cuda.set_sdp_backend_priorities([
+    #     SDPAKernel.flash,
+    #     SDPAKernel.mem_efficient,
+    # ])
+
+
     # model.load_state_dict(torch.load("tinydecoder_lm_best.pth", map_location=device))
 
     print(model)
@@ -145,6 +166,7 @@ def train_tinydecoder_lm(
 
             loss = model.compute_loss(input_ids, attention_mask=attention_mask, labels=input_ids)
 
+            print("\n--------------------------------")
             if step % 50 == 0:
                 allocated = torch.cuda.memory_allocated(device) / 1024**3
                 reserved = torch.cuda.memory_reserved(device) / 1024**3

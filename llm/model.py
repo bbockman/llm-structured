@@ -71,7 +71,7 @@ class CausalSelfAttention(nn.Module):
         # ✅ ADD: Pre-register causal mask buffer to avoid creating it every forward
         self.register_buffer(
             "causal_mask",
-            torch.tril(torch.ones(2048, 2048, dtype=torch.bool)).view(1, 1, 2048, 2048),
+            torch.tril(torch.ones(2048, 2048, dtype=torch.bool)).view(1, 1, 2048, 2048), # (B, H, T, T), for causal B = H = 1
             persistent=False
         )
 
@@ -86,18 +86,12 @@ class CausalSelfAttention(nn.Module):
 
         scores = torch.einsum("bthd,bThd->bhtT", q, k) / math.sqrt(self.head_dim)
 
-        # ✅ IMPROVED: Use pre-registered mask instead of creating new one
-        if attn_mask is None:
-            # Use pre-computed causal mask, sliced to current sequence length
-            causal = self.causal_mask[:, :, :T, :T]
-            scores = scores.masked_fill(~causal, float("-inf"))
-        else:
-            am = attn_mask.view(B, 1, 1, T)
-            scores = scores.masked_fill(am == 0, float("-inf"))
+        if attn_mask is not None:
+            scores = scores.masked_fill(attn_mask.view(B, 1, 1, T) == 0, float("-inf"))
+        scores = scores.masked_fill(~self.causal_mask[:, :, :T, :T], float("-inf"))
 
-        weights = torch.softmax(scores, dim=-1)
-        out = torch.einsum("bhqk,bkhd->bqhd", weights, v)
-        out = out.contiguous().view(B, T, D)
+        scores = torch.softmax(scores, dim=-1)
+        out = torch.einsum("bhqk,bkhd->bqhd", scores, v).contiguous().view(B, T, D)
         return self.to_out(out)
 
 class TransformerBlock(nn.Module):

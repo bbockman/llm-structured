@@ -138,7 +138,8 @@ def tokenize_and_length(example):
         example["text"],
         add_special_tokens=False,
         truncation=False,
-        padding=False
+        max_length=MAX_LENGTH,
+        padding="max_length"
     )
     tokens["length"] = len(tokens["input_ids"])
     # print(f"Single id: length={tokens['length']}, attn = {len(tokens['attention_mask'])}")
@@ -177,9 +178,9 @@ ds = ds.filter(lambda x: x["length"] <= MAX_LENGTH, num_proc=12)
 
 ds = ds.remove_columns(["length"])
 
-output_path = "/mnt/xd/ml/hf/datasets/synth_stage1_formatted"
-# ds.save_to_disk(output_path)
-# print(f"✓ Saved to {output_path}")
+output_path = "/mnt/xd/ml/hf/datasets/synth_stage1_formatted_padded/"
+ds.save_to_disk(output_path)
+print(f"✓ Saved to {output_path}")
 
 
 for example in ds.select(range(10)):

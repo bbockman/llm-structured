@@ -9,6 +9,7 @@ from llm.model import TinyDecoder
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Load tokenizer
 from transformers import GPT2TokenizerFast
 tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
 tokenizer.add_special_tokens({
@@ -19,7 +20,6 @@ tokenizer.add_special_tokens({
         "<sep>"
     ]
 })
-PAD_ID = tokenizer.pad_token_id
 
 print(f"Tokenizer vocab size: {len(tokenizer)}")
 
@@ -46,7 +46,7 @@ print("Model loaded successfully!")
 def generate(
     prompt,
     max_new_tokens=50,
-    temperature=0.8,
+    temperature=1.0,
     top_k=50,
     top_p=0.9,
     show_probs=False
@@ -54,15 +54,33 @@ def generate(
     """Generate text from a prompt"""
     
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+    start = input_ids.shape[1]
+    for tok in input_ids[0]:
+        print(f"  Token ID: {tok.item()} -> '{tokenizer.decode([tok.item()], skip_special_tokens=False)}'")
+        
+    print(f"\nInput shape: {input_ids.shape}")
+    print(f"\nGenerating from prompt (length {start} tokens)...")
     print(f"\nPrompt: {prompt}")
-    print(f"Input tokens: {input_ids.shape[1]}")
+    print(f"Prompt token IDs: {input_ids[0].tolist()}\n")
     
     generated_tokens = []
     
-    for step in range(max_new_tokens):
-        logits = model(input_ids)
+    for step in range(2):
+        #logits = model(input_ids)
+        logits = model.compute_loss(input_ids)  # For diagnostics
+        print(f"\nComputed logits shape: {logits.shape}")
+        argmax_ids = torch.argmax(logits[0], dim=-1)  # shape: [seq_len]
+        decoded_tokens = tokenizer.decode(argmax_ids.tolist(), skip_special_tokens=False)
+        for tok in argmax_ids:
+            print(f"  Token ID: {tok.item()} -> '{tokenizer.decode([tok.item()], skip_special_tokens=False)}'") 
+        print(f"Step {step}: Argmax tokens for all positions so far:")
+        print(f"  Token IDs: {argmax_ids.tolist()}")
+        print(f"  Decoded: {decoded_tokens}")
         next_token_logits = logits[0, -1, :] / temperature
-        
+        pred_token_id = torch.argmax(next_token_logits).item()
+        pred_token_str = tokenizer.decode([pred_token_id])
+        print(f"Step {step}: Predicted token (argmax): '{pred_token_str}' (id: {pred_token_id})")
+
         # Show top predictions
         if show_probs and step < 5:
             top_probs, top_indices = torch.topk(torch.softmax(next_token_logits, dim=-1), k=10)
@@ -112,7 +130,7 @@ print("DIAGNOSTIC TEST - Showing what model predicts")
 print("="*80)
 
 output = generate(
-    "<bos> The cat sat on the",
+    "<bos> Translation regulation in plants operates through multiple coordinated mechanisms including initiation",
     max_new_tokens=10,
     temperature=1.0,
     top_k=0,
@@ -121,21 +139,23 @@ output = generate(
 )
 print(f"\nFull output: {output}")
 
+
+
 # ============================================================
 # REGULAR TESTS
 # ============================================================
-test_prompts = [
-    "Once upon a time",
-    "The meaning of life is",
-]
+# test_prompts = [
+#     "Once upon a time",
+#     "The meaning of life is",
+# ]
 
-print("\n" + "="*80)
-print("TESTING GENERATION")
-print("="*80)
+# print("\n" + "="*80)
+# print("TESTING GENERATION")
+# print("="*80)
 
-for prompt in test_prompts:
-    print("\n" + "-"*80)
-    output = generate(prompt, max_new_tokens=50, temperature=0.8, top_k=50)
-    print(f"\nGenerated:\n{output}")
+# for prompt in test_prompts:
+#     print("\n" + "-"*80)
+#     output = generate(prompt, max_new_tokens=50, temperature=0.8, top_k=50)
+#     print(f"\nGenerated:\n{output}")
 
-print("\nDone!")
+# print("\nDone!")

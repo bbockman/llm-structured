@@ -1,4 +1,3 @@
-from .model import TinyDecoder
-
-__all__ = ['TinyDecoder']
+# from .model import TinyDecoder
+from .model_flash import TinyDecoder
 
