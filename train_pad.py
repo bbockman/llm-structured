@@ -36,7 +36,7 @@ def get_tensor_memory():
     import gc
     import torch
     from collections import defaultdict
-
+    
     summary = defaultdict(lambda: {"count": 0, "total_mb": 0.0})
     for obj in gc.get_objects():
         try:
@@ -88,6 +88,7 @@ def train_tinydecoder_lm(
         num_workers=12,
         collate_fn=data_collator
     )
+    print(f"data loader length: {len(loader)}")
 
     # ----------------------------------
     # Model

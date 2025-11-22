@@ -102,7 +102,9 @@ def to_stage3(example):
 from torch.utils.data import DataLoader
 from transformers import GPT2TokenizerFast
 from load_shard import load_synth_shards
+from datasets import disable_caching
 
+disable_caching()
 #BASE = "/mnt/xd/ml/hf/datasets/PleIAs___synth/default/0.0.0/6ebe6a97043747aa5f2232ea1182841c4a6afcb0/"; 
 #data_files = { "train": [f"{BASE}synth-train-{i:05d}-of-00500.arrow" for i in range(20)] } 
 #ds = load_dataset("arrow", data_files=data_files, split="train")
@@ -132,16 +134,14 @@ def to_stage1(example):
     text = f"<bos> {example['synthetic_answer'].strip()} <eos>"
     return {"text": text}
 
-def tokenize_and_length(example):
+def tokenize(example):
     # Single example
     tokens = tokenizer(
         example["text"],
         add_special_tokens=False,
-        truncation=False,
+        truncation=True,
         padding=False
     )
-    tokens["length"] = len(tokens["input_ids"])
-    # print(f"Single id: length={tokens['length']}, attn = {len(tokens['attention_mask'])}")
     return tokens
 
 print("Loading dataset...")
@@ -163,19 +163,19 @@ ds = ds.map(
     num_proc=12
 )
 
-print("Tokenizing and calculating lengths...")
+print("Tokenizing...")
 ds = ds.map(
-    tokenize_and_length,
+    tokenize,
     batched=False,
     num_proc=12,
     remove_columns=["text"],
 )
 
-print("Filtering by token length...")
-ds = ds.filter(lambda x: x["length"] <= MAX_LENGTH, num_proc=12)
+# print("Filtering by token length...")
+# ds = ds.filter(lambda x: x["length"] <= MAX_LENGTH, num_proc=12)
 
 
-ds = ds.remove_columns(["length"])
+# ds = ds.remove_columns(["length"])
 
 output_path = "/mnt/xd/ml/hf/datasets/synth_stage1_formatted"
 # ds.save_to_disk(output_path)
