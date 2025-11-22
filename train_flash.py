@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import gc
 
+from llm import model
 from utils import get_gpu_stats, init_gpu_monitor, count_parameters
 from torch.utils.data import DataLoader
 
@@ -50,6 +51,12 @@ def get_tensor_memory():
         print(f"{val['count']:3d}x {dtype} {shape} on {device}: {val['total_mb']:.2f} MB")
     print("--- End of Summary ---\n")
 
+def print_param_ids(model):
+    print("\n--- Model Parameter IDs ---")
+    for name, param in model.named_parameters():
+        print(f"{name}: id={id(param.data)}, shape={tuple(param.shape)}, device={param.device}")
+    print("--- End ---\n")
+
 def train_tinydecoder_lm(
     epochs=1,
     batch_size=1,
@@ -63,7 +70,7 @@ def train_tinydecoder_lm(
     # ----------------------------------
     print("Loading dataset...")
     ds = load_synth_shards(
-        num_shards=7,
+        num_shards=1,
         base_path="/mnt/xd/ml/hf/datasets/synth_stage1_formatted/",
         pattern_prefix="data",
         total_shards=7
@@ -91,12 +98,23 @@ def train_tinydecoder_lm(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TinyDecoder(
         vocab_size=len(tokenizer),
-        d_model=384,
-        n_layers=8,
-        n_heads=8,
-        d_ff=1536,
+        d_model=768,
+        n_layers=12,
+        n_heads=12,
+        d_ff=3072,
         max_seq=max_seq_len
     ).to(device)
+
+
+    print_param_ids(model)
+
+    # Print all tensors matching embedding shape
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj) and obj.shape == (50261, 768):
+                print(f"Embedding tensor id: {id(obj)}, device={obj.device}")
+        except Exception:
+            pass
 
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
@@ -142,6 +160,7 @@ def train_tinydecoder_lm(
     # ----------------------------------
     gpu_handle = init_gpu_monitor()
     get_gpu_stats(gpu_handle)
+    # torch.cuda.memory_unified()
     
     # ----------------------------------
     # Training loop
@@ -149,6 +168,7 @@ def train_tinydecoder_lm(
     print("\nStarting training...")
     best_loss = float("inf")
     best_state = model.state_dict()
+    batch_accum = 2
 
     start = time.perf_counter()
 
@@ -162,15 +182,17 @@ def train_tinydecoder_lm(
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
 
-            optimizer.zero_grad()
+            if step % batch_accum == 0:
+                optimizer.zero_grad()
 
-            loss = model.compute_loss(input_ids, attention_mask=attention_mask, labels=input_ids)
+            loss = model.compute_loss(input_ids, 
+                                      attention_mask=attention_mask, 
+                                      labels=input_ids)/batch_accum
 
-            print("\n--------------------------------")
             if step % 50 == 0:
                 allocated = torch.cuda.memory_allocated(device) / 1024**3
                 reserved = torch.cuda.memory_reserved(device) / 1024**3
-                print(f"Epoch {epoch+1} Step {step} Loss: {loss.item():.4f} | "
+                print(f"Epoch {epoch+1} Step {step} Loss: {loss.item() * batch_accum:.4f} | "
                       f"Mem: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved")
 
             loss.backward()
@@ -178,9 +200,12 @@ def train_tinydecoder_lm(
             # ✅ Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            optimizer.step()
+            # only changed loss scaling since initial git commit with flash model save
+            if step % batch_accum == batch_accum - 1 or step == len(loader) - 1:
+                loss = loss * batch_accum / (step % batch_accum + 1)
+                optimizer.step()
 
-            running_loss += loss.item()
+            running_loss += loss.item() * batch_accum 
             
             # ✅ Explicit cleanup
             del input_ids, attention_mask, loss

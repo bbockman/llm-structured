@@ -45,7 +45,7 @@ print("Model loaded successfully!")
 @torch.no_grad()
 def generate(
     prompt,
-    max_new_tokens=50,
+    max_new_tokens=1024,
     temperature=0.8,
     top_k=50,
     top_p=0.9,
@@ -93,9 +93,11 @@ def generate(
         input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
         
         if next_token.item() == tokenizer.eos_token_id:
+            generated_tokens.append(tokenizer.eos_token_id)
             break
     
-    generated_text = tokenizer.decode(input_ids[0], skip_special_tokens=True)
+    print("\nTotal generated tokens:", len(generated_tokens))
+    generated_text = tokenizer.decode(input_ids[0], skip_special_tokens=False)
     
     if show_probs:
         print("\nGenerated tokens:")
@@ -112,8 +114,8 @@ print("DIAGNOSTIC TEST - Showing what model predicts")
 print("="*80)
 
 output = generate(
-    "<bos> The cat sat on the",
-    max_new_tokens=10,
+    "<bos> Translation regulation in plants operates through multiple coordinated mechanisms including initiation",
+    max_new_tokens=1024,
     temperature=1.0,
     top_k=0,
     top_p=1.0,
@@ -125,8 +127,10 @@ print(f"\nFull output: {output}")
 # REGULAR TESTS
 # ============================================================
 test_prompts = [
-    "Once upon a time",
-    "The meaning of life is",
+    "<bos> Artificial intelligence is",
+    "<bos> Geometric series converge when",
+    "<bos> In a distant future, humanity has",
+    "<bos> Durring world war II,",
 ]
 
 print("\n" + "="*80)
@@ -135,7 +139,7 @@ print("="*80)
 
 for prompt in test_prompts:
     print("\n" + "-"*80)
-    output = generate(prompt, max_new_tokens=50, temperature=0.8, top_k=50)
+    output = generate(prompt)
     print(f"\nGenerated:\n{output}")
 
 print("\nDone!")
