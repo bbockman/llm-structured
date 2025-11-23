@@ -26,14 +26,14 @@ print(f"Tokenizer vocab size: {len(tokenizer)}")
 # Load model
 model = TinyDecoder(
     vocab_size=len(tokenizer),
-    d_model=384,
-    n_layers=8,
-    n_heads=8,
-    d_ff=1536,
+    d_model=1280,
+    n_layers=24,
+    n_heads=16,
+    d_ff=5120,
     max_seq=1024
 ).to(device)
 
-checkpoint = torch.load("tinydecoder_lm_best.pth", map_location=device)
+checkpoint = torch.load("tinydecoder_lm_best_flash.pth", map_location=device)
 model.load_state_dict(checkpoint)
 model.eval()
 

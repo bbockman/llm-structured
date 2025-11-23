@@ -2,7 +2,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR
 import gc
 
 from llm import model
@@ -98,62 +98,23 @@ def train_tinydecoder_lm(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TinyDecoder(
         vocab_size=len(tokenizer),
-        d_model=768,
-        n_layers=12,
-        n_heads=12,
-        d_ff=3072,
+        d_model=1280,
+        n_layers=24,
+        n_heads=16,
+        d_ff=5120,
         max_seq=max_seq_len
     ).to(device)
 
-
-    print_param_ids(model)
-
-    # Print all tensors matching embedding shape
-    for obj in gc.get_objects():
-        try:
-            if torch.is_tensor(obj) and obj.shape == (50261, 768):
-                print(f"Embedding tensor id: {id(obj)}, device={obj.device}")
-        except Exception:
-            pass
+    # print_param_ids(model)
 
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-
-    from torch.backends.cuda import sdp_kernel
-
-    
-    # torch.backends.cuda.enable_sdpa(
-    #     kernel=SDPAKernel.flash, 
-    #     fallback=SDPAKernel.mem_efficient, 
-    # )
-
-    torch.backends.cuda.sdp_kernel(
-        enable_flash=True,
-        enable_math=False,
-        enable_mem_efficient=True,
-    )
-
-
-    # torch.backends.cuda.set_sdp_backend_priorities([
-    #     SDPAKernel.flash,
-    #     SDPAKernel.mem_efficient,
-    # ])
 
 
     # model.load_state_dict(torch.load("tinydecoder_lm_best.pth", map_location=device))
 
     print(model)
     count_parameters(model)
-
-    # ----------------------------------
-    # Optimizer + LR schedule
-    # ----------------------------------
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=lr,
-        weight_decay=1e-2
-    )
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
 
     # ----------------------------------
     # GPU monitor
@@ -168,8 +129,24 @@ def train_tinydecoder_lm(
     print("\nStarting training...")
     best_loss = float("inf")
     best_state = model.state_dict()
-    batch_accum = 2
+    batch_accum = 4
 
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=1e-2
+    )
+    # scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
+    scheduler = OneCycleLR(optimizer, 
+                           max_lr=lr, 
+                           epochs=epochs, 
+                           steps_per_epoch=len(loader)//batch_accum,
+                           pct_start=0.05,
+                           div_factor=10.0,
+                           final_div_factor=100.0,
+                           anneal_strategy='cos',
+                           last_epoch=-1)
+    
     start = time.perf_counter()
 
     for epoch in range(epochs):
@@ -260,7 +237,7 @@ def train_tinydecoder_lm(
 if __name__ == "__main__":
     train_tinydecoder_lm(
         epochs=4,
-        batch_size=16,
-        lr=1e-4,
-        save_path="tinydecoder_lm_best.pth"
+        batch_size=8,
+        lr=1e-3,
+        save_path="tinydecoder_lm_best_flash.pth"
     )

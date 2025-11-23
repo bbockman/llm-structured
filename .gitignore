@@ -4,3 +4,4 @@ refernce
 **/__pycache__/
 *.pyc
 **/scratch**
+*.pth

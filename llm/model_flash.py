@@ -56,52 +56,37 @@ class SwiGLU(nn.Module):
         a, b = x.chunk(2, dim=-1)
         return self.w2(a * self.act(b))
 
+from flash_attn.modules.mha import FlashMHA
+import torch
+import torch.nn as nn
+
 class CausalSelfAttention(nn.Module):
-    def __init__(self, d_model, n_heads, rotary_emb: RotaryEmbedding):
+    def __init__(self, d_model, n_heads, rotary_emb):
         super().__init__()
-        assert d_model % n_heads == 0
-        self.n_heads = n_heads
-        self.head_dim = d_model // n_heads
-        self.to_q = nn.Linear(d_model, d_model, bias=False)
-        self.to_k = nn.Linear(d_model, d_model, bias=False)
-        self.to_v = nn.Linear(d_model, d_model, bias=False)
-        self.to_out = nn.Linear(d_model, d_model, bias=False)
         self.rotary = rotary_emb
 
-    def forward(self, x, attn_mask=None):
-        B, T, D = x.size()
-
-        # Projections
-        q = self.to_q(x).view(B, T, self.n_heads, self.head_dim)
-        k = self.to_k(x).view(B, T, self.n_heads, self.head_dim)
-        v = self.to_v(x).view(B, T, self.n_heads, self.head_dim)
-
-        # Apply rotary embeddings (must be before SDPA)
-        q = self.rotary.apply_rotary(q)
-        k = self.rotary.apply_rotary(k)
-
-        # Permute into SDPA format
-        # SDPA expects: (B, num_heads, T, head_dim)
-        q = q.permute(0, 2, 1, 3)
-        k = k.permute(0, 2, 1, 3)
-        v = v.permute(0, 2, 1, 3)
-
-        # Prepare attention mask for SDPA (optional)
-        # If you use padding masks, expand to (B, 1, T)
-        if attn_mask is not None:
-            attn_mask = attn_mask.view(B, 1, 1, T).bool()
-
-        # SDPA does causal masking internally when is_causal=True.
-        # No manual causal mask needed!
-        out = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v,
-            attn_mask=attn_mask,
-            is_causal=True
+        self.attn = FlashMHA(
+            embed_dim=d_model,
+            num_heads=n_heads,
+            causal=True,
+            dropout=0.0,
+            bias=False,
+            use_rotary_emb=True     # FlashMHA will call rotary_emb_fn
         )
 
-        # Back to (B, T, D)
-        out = out.permute(0, 2, 1, 3).contiguous().view(B, T, D)
-        return self.to_out(out)
+    def forward(self, x, attn_mask=None):
+        """
+        x: (B, T, D)
+        attn_mask: (B, T) bool mask, True=pad/masked, False=valid
+        """
+
+        # FlashAttention will call rotary_emb_fn(q, k)
+        return self.attn(
+            x,
+            key_padding_mask=attn_mask,
+            rotary_emb_fn=self.rotary.apply_rotary_flash
+        )
+
 
 
 class TransformerBlock(nn.Module):
@@ -117,6 +102,7 @@ class TransformerBlock(nn.Module):
         x = x + self.mlp(self.mlp_norm(x))
         return x
 
+from torch.utils.checkpoint import checkpoint
 class TinyDecoder(nn.Module):
     def __init__(self, vocab_size, d_model=512, n_layers=6, n_heads=8, d_ff=2048, max_seq=2048):
         super().__init__()
@@ -146,10 +132,10 @@ class TinyDecoder(nn.Module):
 
     def forward(self, input_ids, attention_mask=None):
         # input_ids: [B, T]
-        x = self.embed(input_ids)  # [B, T, D]
+        out = self.embed(input_ids)  # [B, T, D]
         for blk in self.blocks:
-            x = blk(x, attn_mask=attention_mask)
-        x = self.ln_f(x)
+            out = checkpoint(blk, out, attention_mask, use_reentrant=False)
+        x = self.ln_f(out)
         logits = self.lm_head(x)  # [B, T, V]
         return logits
     
@@ -158,10 +144,10 @@ class TinyDecoder(nn.Module):
         Compute loss more efficiently by computing logits and loss together.
         This can save memory compared to materializing full logits then computing loss.
         """
-        x = self.embed(input_ids)
+        out = self.embed(input_ids)
         for blk in self.blocks:
-            x = blk(x, attn_mask=attention_mask)
-        x = self.ln_f(x)
+            out = checkpoint(blk, out, attention_mask, use_reentrant=False)
+        x = self.ln_f(out)
         
         if labels is None:
             # Inference mode - return full logits
