@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from transformers import AutoTokenizer
-from llm.model import TinyDecoder
+from llm.model_flash import TinyDecoder
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -35,6 +35,7 @@ model = TinyDecoder(
 
 checkpoint = torch.load("tinydecoder_lm_best_flash.pth", map_location=device)
 model.load_state_dict(checkpoint)
+model = model.to(device)
 model.eval()
 
 print("Model loaded successfully!")
@@ -130,7 +131,8 @@ test_prompts = [
     "<bos> Artificial intelligence is",
     "<bos> Geometric series converge when",
     "<bos> In a distant future, humanity has",
-    "<bos> Durring world war II,",
+    "<bos> During World War II,",
+    "<bos> The Deep South's"
 ]
 
 print("\n" + "="*80)

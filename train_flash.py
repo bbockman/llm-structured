@@ -107,8 +107,15 @@ def train_tinydecoder_lm(
 
     # print_param_ids(model)
 
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+    from torch.backends.cuda import sdp_kernel
+    # torch.backends.cuda.matmul.allow_tf32 = True
+    # torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+
+    torch.backends.cuda.sdp_kernel(
+        enable_flash=True,
+        enable_math=False,
+        enable_mem_efficient=True,
+    )
 
 
     # model.load_state_dict(torch.load("tinydecoder_lm_best.pth", map_location=device))

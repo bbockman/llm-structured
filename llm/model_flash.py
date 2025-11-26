@@ -56,36 +56,54 @@ class SwiGLU(nn.Module):
         a, b = x.chunk(2, dim=-1)
         return self.w2(a * self.act(b))
 
-from flash_attn.modules.mha import FlashMHA
-import torch
-import torch.nn as nn
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, d_model, n_heads, rotary_emb):
+    def __init__(self, d_model, n_heads, rotary_emb: RotaryEmbedding):
         super().__init__()
+        assert d_model % n_heads == 0
+
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+
+        self.to_q = nn.Linear(d_model, d_model, bias=False)
+        self.to_k = nn.Linear(d_model, d_model, bias=False)
+        self.to_v = nn.Linear(d_model, d_model, bias=False)
+        self.to_out = nn.Linear(d_model, d_model, bias=False)
+
         self.rotary = rotary_emb
 
-        self.attn = FlashMHA(
-            embed_dim=d_model,
-            num_heads=n_heads,
-            causal=True,
-            dropout=0.0,
-            bias=False,
-            use_rotary_emb=True     # FlashMHA will call rotary_emb_fn
-        )
-
     def forward(self, x, attn_mask=None):
-        """
-        x: (B, T, D)
-        attn_mask: (B, T) bool mask, True=pad/masked, False=valid
-        """
+        B, T, D = x.size()
 
-        # FlashAttention will call rotary_emb_fn(q, k)
-        return self.attn(
-            x,
-            key_padding_mask=attn_mask,
-            rotary_emb_fn=self.rotary.apply_rotary_flash
+        # Projections
+        q = self.to_q(x).view(B, T, self.n_heads, self.head_dim)
+        k = self.to_k(x).view(B, T, self.n_heads, self.head_dim)
+        v = self.to_v(x).view(B, T, self.n_heads, self.head_dim)
+
+        # Apply rotary embeddings before SDPA
+        q = self.rotary.apply_rotary(q)
+        k = self.rotary.apply_rotary(k)
+
+        # SDPA expects: (B, num_heads, T, head_dim)
+        q = q.permute(0, 2, 1, 3)
+        k = k.permute(0, 2, 1, 3)
+        v = v.permute(0, 2, 1, 3)
+
+        # Prepare attention mask: (B, 1, 1, T)
+        if attn_mask is not None:
+            attn_mask = attn_mask.view(B, 1, 1, T).bool()
+
+        # SDPA handles causal masking internally when is_causal=True
+        out = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attn_mask,
+            is_causal=True
         )
+
+        out = out.transpose(1, 2).contiguous().view(B, T, D)
+
+        return self.to_out(out)
+
 
 
 

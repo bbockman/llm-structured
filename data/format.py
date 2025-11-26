@@ -67,24 +67,25 @@ def to_stage3(example):
     query = example.get("query", "").strip()
     reasoning = example.get("synthetic_reasoning", "").strip()
     answer = example.get("synthetic_answer", "").strip()
-    lang_token = f"<lang:{example['language']}>"
-    exercise = example.get("exercise", "")
+    # lang_token = f"<lang:{example['language']}>"
+    # exercise = example.get("exercise", "")
     
-    parts = ["<bos>", lang_token]
+    parts = ["<bos> "]
     
     if query:
+        parts.append("<query> ")
         parts.append(query)
     
     if reasoning:
-        parts.append("<think>")
+        parts.append("<think> ")
         parts.append(reasoning)
-        parts.append("</think>")
     
     if answer:
+        parts.append("<answer> ")
         parts.append(answer)
     
     # Include process-focused tasks (editing, memorization, constrained writing)
-    if len(parts) > 2:
+    if len(parts) > 1:
         parts.append("<eos>")
         return {"text": " ".join(parts)}
     else:
@@ -139,9 +140,10 @@ def tokenize(example):
     tokens = tokenizer(
         example["text"],
         add_special_tokens=False,
-        truncation=True,
+        truncation=False,
         padding=False
     )
+    tokens["length"] = len(tokens["input_ids"])
     return tokens
 
 print("Loading dataset...")
@@ -171,15 +173,18 @@ ds = ds.map(
     remove_columns=["text"],
 )
 
-# print("Filtering by token length...")
-# ds = ds.filter(lambda x: x["length"] <= MAX_LENGTH, num_proc=12)
+print("Filtering by token length...")
+ds = ds.filter(
+    lambda x: x["length"] <= MAX_LENGTH,
+    num_proc=12
+)
 
+ds = ds.remove_columns(["length"])
 
-# ds = ds.remove_columns(["length"])
 
 output_path = "/mnt/xd/ml/hf/datasets/synth_stage1_formatted"
-# ds.save_to_disk(output_path)
-# print(f"✓ Saved to {output_path}")
+ds.save_to_disk(output_path)
+print(f"✓ Saved to {output_path}")
 
 
 for example in ds.select(range(10)):
