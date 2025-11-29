@@ -1,1 +1,3 @@
-flash-attn
+nvidia-ml-py
+datasets
+transformers
