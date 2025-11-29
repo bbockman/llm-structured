@@ -111,11 +111,6 @@ try:
 except:
     print("xFormers FAILED")
 
-try:
-    import transformer_engine
-    print("TransformerEngine OK")
-except:
-    print("TransformerEngine FAILED")
 
 EOF
 
