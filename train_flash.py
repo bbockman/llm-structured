@@ -16,16 +16,8 @@ from transformers import DataCollatorWithPadding
 # ============================================================
 # TOKENIZER (same as smoke test)
 # ============================================================
-from transformers import GPT2TokenizerFast
-tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-tokenizer.add_special_tokens({
-    "bos_token": "<bos>",
-    "eos_token": "<eos>",
-    "pad_token": "<pad>",
-    "additional_special_tokens": [
-        "<sep>"
-    ]
-})
+from tokenizer.pleias_tok import PleiasTokenizer
+tokenizer = PleiasTokenizer().base
 
 print(f"Tokenizer vocab size: {len(tokenizer)}")
 
@@ -144,47 +136,8 @@ def train_tinydecoder_lm(
         weight_decay=1e-2
     )
 
-    # ckpt = torch.load("checkpoint.pt", map_location="cpu")
-    # model.load_state_dict(ckpt["model"])
-    # optimizer.load_state_dict(ckpt["optimizer"])
-    # scheduler.load_state_dict(ckpt["scheduler"])
-    # global_step = ckpt["global_step"]
-
 
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
-    # scheduler = OneCycleLR(optimizer, 
-    #                        max_lr=lr, 
-    #                        epochs=epochs, 
-    #                        steps_per_epoch=len(loader)//batch_accum,
-    #                        pct_start=0.25,
-    #                        div_factor=20.0,
-    #                        final_div_factor=1000.0,
-    #                        anneal_strategy='cos',
-    #                        last_epoch=-1)
-    
-    # from torch.optim.lr_scheduler import SequentialLR, LinearLR
-
-    # total_steps = epochs * len(loader) // batch_accum
-    # start_ratio = 1.0
-    # end_ratio = 0.01
-    # warmup_steps = int(0.02 * total_steps)   # 2% warmup
-    # scheduler = SequentialLR(
-    #     optimizer,
-    #     schedulers=[
-    #         LinearLR(
-    #             optimizer,
-    #             start_factor=start_ratio,      # start at 10% of LR_MAX
-    #             end_factor=1.0,        # end at 100% of LR_MAX
-    #             total_iters=warmup_steps,
-    #         ),
-    #         CosineAnnealingLR(
-    #             optimizer,
-    #             T_max=total_steps - warmup_steps,
-    #             eta_min=lr * end_ratio,        # ← you *can* set the cosine floor here
-    #         ),
-    #     ],
-    #     milestones=[warmup_steps],
-    # )
 
     start = time.perf_counter()
 
@@ -268,13 +221,6 @@ def train_tinydecoder_lm(
     elapsed = time.perf_counter() - start
     print(f"\nTraining completed in {elapsed:.2f}s")
     print(f"Best epoch loss = {best_loss:.4f}")
-
-    # torch.save({
-    #     "model": model.state_dict(),
-    #     "optimizer": optimizer.state_dict(),
-    #     "scheduler": scheduler.state_dict(),
-    #     "global_step": global_step,
-    # }, "checkpoint.pt")
 
 
     if save_path:
