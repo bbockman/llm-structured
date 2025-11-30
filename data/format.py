@@ -114,18 +114,8 @@ disable_caching()
 
 
 # special_langs = [f"<lang:{x}>" for x in ["en","es","ja","fr","zh","de"]]
-
-tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-print(tokenizer.special_tokens_map)
-
-tokenizer.add_special_tokens({
-    "bos_token": "<bos>",
-    "eos_token": "<eos>",
-    "pad_token": "<pad>",
-    "additional_special_tokens": [
-        "<sep>"
-    ]
-})
+from tokenizer.pleias_tok import PleiasTokenizer
+tokenizer = PleiasTokenizer().base
 
 # 20B tokens
 def to_stage1(example):

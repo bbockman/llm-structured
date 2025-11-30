@@ -24,16 +24,8 @@ print("Starting iteration...")
 from transformers import DataCollatorForLanguageModeling, AutoTokenizer, DataCollatorWithPadding
 from torch.utils.data import DataLoader
 
-from transformers import GPT2TokenizerFast
-tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-tokenizer.add_special_tokens({
-    "bos_token": "<bos>",
-    "eos_token": "<eos>",
-    "pad_token": "<pad>",
-    "additional_special_tokens": [
-        "<sep>"
-    ]
-})
+from tokenizer.pleias_tok import PleiasTokenizer
+tokenizer = PleiasTokenizer().base
 
 data_collator = DataCollatorWithPadding(
         tokenizer=tokenizer,

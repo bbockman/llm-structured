@@ -17,17 +17,8 @@ from transformers import DataCollatorWithPadding
 # ============================================================
 # TOKENIZER (same as smoke test)
 # ============================================================
-from transformers import GPT2TokenizerFast
-tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-tokenizer.add_special_tokens({
-    "bos_token": "<bos>",
-    "eos_token": "<eos>",
-    "pad_token": "<pad>",
-    "additional_special_tokens": [
-        "<sep>"
-    ]
-})
-PAD_ID = tokenizer.pad_token_id
+from tokenizer.pleias_tok import PleiasTokenizer
+tokenizer = PleiasTokenizer().base
 
 print(f"Tokenizer vocab size: {len(tokenizer)}")
 

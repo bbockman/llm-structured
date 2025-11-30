@@ -151,7 +151,7 @@ def train_tinydecoder_lm(
     # global_step = ckpt["global_step"]
 
 
-    # scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
+    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
     # scheduler = OneCycleLR(optimizer, 
     #                        max_lr=lr, 
     #                        epochs=epochs, 
@@ -162,29 +162,29 @@ def train_tinydecoder_lm(
     #                        anneal_strategy='cos',
     #                        last_epoch=-1)
     
-    from torch.optim.lr_scheduler import SequentialLR, LinearLR
+    # from torch.optim.lr_scheduler import SequentialLR, LinearLR
 
-    total_steps = epochs * len(loader) // batch_accum
-    start_ratio = 1.0
-    end_ratio = 0.01
-    warmup_steps = int(0.02 * total_steps)   # 2% warmup
-    scheduler = SequentialLR(
-        optimizer,
-        schedulers=[
-            LinearLR(
-                optimizer,
-                start_factor=start_ratio,      # start at 10% of LR_MAX
-                end_factor=1.0,        # end at 100% of LR_MAX
-                total_iters=warmup_steps,
-            ),
-            CosineAnnealingLR(
-                optimizer,
-                T_max=total_steps - warmup_steps,
-                eta_min=lr * end_ratio,        # ← you *can* set the cosine floor here
-            ),
-        ],
-        milestones=[warmup_steps],
-    )
+    # total_steps = epochs * len(loader) // batch_accum
+    # start_ratio = 1.0
+    # end_ratio = 0.01
+    # warmup_steps = int(0.02 * total_steps)   # 2% warmup
+    # scheduler = SequentialLR(
+    #     optimizer,
+    #     schedulers=[
+    #         LinearLR(
+    #             optimizer,
+    #             start_factor=start_ratio,      # start at 10% of LR_MAX
+    #             end_factor=1.0,        # end at 100% of LR_MAX
+    #             total_iters=warmup_steps,
+    #         ),
+    #         CosineAnnealingLR(
+    #             optimizer,
+    #             T_max=total_steps - warmup_steps,
+    #             eta_min=lr * end_ratio,        # ← you *can* set the cosine floor here
+    #         ),
+    #     ],
+    #     milestones=[warmup_steps],
+    # )
 
     start = time.perf_counter()
 
@@ -202,8 +202,9 @@ def train_tinydecoder_lm(
                 optimizer.zero_grad()
 
             loss = model.compute_loss(input_ids, 
-                                      attention_mask=attention_mask, 
-                                      labels=input_ids)/batch_accum
+                                        pad_id=tokenizer.pad_token_id,
+                                        attention_mask=attention_mask, 
+                                        labels=input_ids)/batch_accum
 
             if step % 50 == 0:
                 allocated = torch.cuda.memory_allocated(device) / 1024**3
@@ -220,7 +221,6 @@ def train_tinydecoder_lm(
             if step % batch_accum == batch_accum - 1 or step == len(loader) - 1:
                 loss = loss * batch_accum / (step % batch_accum + 1)
                 optimizer.step()
-                scheduler.step()
 
             running_loss += loss.item() * batch_accum 
             
@@ -231,6 +231,8 @@ def train_tinydecoder_lm(
             if step % 100 == 0 and step > 0:
                 torch.cuda.empty_cache()
 
+        scheduler.step()
+        
         # ✅ End of epoch cleanup
         torch.cuda.empty_cache()
         gc.collect()
@@ -286,5 +288,5 @@ if __name__ == "__main__":
         epochs=4,
         batch_size=8,
         lr=1e-4,
-        save_path="tinydecoder_lm_best_flash.pth"
+        save_path="tinydecoder_lm_best_temp.pth"
     )

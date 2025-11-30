@@ -157,7 +157,7 @@ class TinyDecoder(nn.Module):
         logits = self.lm_head(x)  # [B, T, V]
         return logits
     
-    def compute_loss(self, input_ids, attention_mask=None, labels=None):
+    def compute_loss(self, input_ids, pad_id= None, attention_mask=None, labels=None):
         """
         Compute loss more efficiently by computing logits and loss together.
         This can save memory compared to materializing full logits then computing loss.
@@ -183,7 +183,7 @@ class TinyDecoder(nn.Module):
         loss = F.cross_entropy(
             shift_logits.view(-1, shift_logits.size(-1)),
             shift_labels.view(-1),
-            ignore_index=-100  # Standard ignore index
+            ignore_index=pad_id  # Standard ignore index
         )
         
         return loss

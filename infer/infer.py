@@ -9,17 +9,8 @@ from llm.model_flash import TinyDecoder
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-from transformers import GPT2TokenizerFast
-tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-tokenizer.add_special_tokens({
-    "bos_token": "<bos>",
-    "eos_token": "<eos>",
-    "pad_token": "<pad>",
-    "additional_special_tokens": [
-        "<sep>"
-    ]
-})
-PAD_ID = tokenizer.pad_token_id
+from tokenizer.pleias_tok import PleiasTokenizer
+tokenizer = PleiasTokenizer().base
 
 print(f"Tokenizer vocab size: {len(tokenizer)}")
 
