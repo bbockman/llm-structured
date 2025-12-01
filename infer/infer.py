@@ -17,14 +17,14 @@ print(f"Tokenizer vocab size: {len(tokenizer)}")
 # Load model
 model = TinyDecoder(
     vocab_size=len(tokenizer),
-    d_model=1280,
-    n_layers=24,
+    d_model=1024,
+    n_layers=12,
     n_heads=16,
-    d_ff=5120,
+    d_ff=4096,
     max_seq=1024
 ).to(device)
 
-checkpoint = torch.load("tinydecoder_lm_best_flash.pth", map_location=device)
+checkpoint = torch.load("tinydecoder_lm_best_temp.pth", map_location=device)
 model.load_state_dict(checkpoint)
 model = model.to(device)
 model.eval()
@@ -45,7 +45,10 @@ def generate(
 ):
     """Generate text from a prompt"""
     
-    input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+    input_ids = tokenizer.encode(prompt, 
+                                 return_tensors="pt",
+                                 add_special_tokens=False).to(device)
+    print(f"Input IDs: {input_ids}")
     print(f"\nPrompt: {prompt}")
     print(f"Input tokens: {input_ids.shape[1]}")
     
@@ -106,7 +109,7 @@ print("DIAGNOSTIC TEST - Showing what model predicts")
 print("="*80)
 
 output = generate(
-    "<bos> Translation regulation in plants operates through multiple coordinated mechanisms including initiation",
+    f"{tokenizer.bos_token} Translation regulation in plants operates through multiple coordinated mechanisms including initiation",
     max_new_tokens=1024,
     temperature=1.0,
     top_k=0,
@@ -119,11 +122,11 @@ print(f"\nFull output: {output}")
 # REGULAR TESTS
 # ============================================================
 test_prompts = [
-    "<bos> Artificial intelligence is",
-    "<bos> Geometric series converge when",
-    "<bos> In a distant future, humanity has",
-    "<bos> During World War II,",
-    "<bos> The Deep South's"
+    f"{tokenizer.bos_token} Artificial intelligence is",
+    f"{tokenizer.bos_token} Geometric series converge when",
+    f"{tokenizer.bos_token} In a distant future, humanity has",
+    f"{tokenizer.bos_token} During World War II,",
+    f"{tokenizer.bos_token} The Deep South's"
 ]
 
 print("\n" + "="*80)

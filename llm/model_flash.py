@@ -105,8 +105,6 @@ class CausalSelfAttention(nn.Module):
         return self.to_out(out)
 
 
-
-
 class TransformerBlock(nn.Module):
     def __init__(self, d_model, n_heads, d_ff, rotary_emb):
         super().__init__()

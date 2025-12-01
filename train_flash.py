@@ -50,7 +50,7 @@ def print_param_ids(model):
     print("--- End ---\n")
 
 def train_tinydecoder_lm(
-    epochs=1,
+    epochs=4,
     batch_size=1,
     lr=1e-4,
     max_seq_len=1024,
@@ -65,7 +65,7 @@ def train_tinydecoder_lm(
         num_shards=1,
         base_path="/mnt/xd/ml/hf/datasets/synth_stage1_formatted/",
         pattern_prefix="data",
-        total_shards=7
+        total_shards=10
     )
     print(f"Loaded {len(ds)} examples")
     print(f"Columns: {ds.column_names}")
@@ -138,7 +138,7 @@ def train_tinydecoder_lm(
 
 
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
-
+    
     start = time.perf_counter()
 
     for epoch in range(epochs):

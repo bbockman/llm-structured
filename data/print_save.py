@@ -21,12 +21,13 @@ print(f"Columns: {ds.column_names}")
 
 print("Starting iteration...")
 
-from transformers import DataCollatorForLanguageModeling, AutoTokenizer, DataCollatorWithPadding
+from transformers import DataCollatorWithPadding
 from torch.utils.data import DataLoader
 
 from tokenizer.pleias_tok import PleiasTokenizer
 tokenizer = PleiasTokenizer().base
 print(f"Tokenizer vocab size: {len(tokenizer)}")
+print(f"Pad token ID: {tokenizer.pad_token_id}")
 data_collator = DataCollatorWithPadding(
         tokenizer=tokenizer,
         padding=True,
@@ -53,8 +54,8 @@ for i, batch in enumerate(loader):
     print("Decoded tokens (one per line):")
     for tok_id in batch["input_ids"][0]:
         decoded_token = tokenizer.decode([tok_id], skip_special_tokens=False)
-        print(decoded_token)
-    if i >= 5:
+        #print(decoded_token)
+    if i >= 10:
         break
 
 
