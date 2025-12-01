@@ -1,12 +1,10 @@
-from transformers import GPT2TokenizerFast
+from transformers import AutoTokenizer
 
-tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-tokenizer.add_special_tokens({
-    "bos_token": "<bos>",
-    "eos_token": "<eos>",
-    "pad_token": "<pad>",
-    "additional_special_tokens": ["<sep>"]
-})
+tokenizer = AutoTokenizer.from_pretrained("PleIAs/Monad")
+#print(len(tokenizer))  # 8192
+#print(tokenizer.special_tokens_map)
+
+# {'bos_token': '<|begin_of_text|>', 'eos_token': '<|end_of_text|>', 'unk_token': '[UNK]', 'pad_token': '[PAD]'}
 
 class PleiasTokenizer:
     def __init__(self):

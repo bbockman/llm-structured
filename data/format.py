@@ -114,25 +114,37 @@ disable_caching()
 
 
 # special_langs = [f"<lang:{x}>" for x in ["en","es","ja","fr","zh","de"]]
-from tokenizer.pleias_tok import PleiasTokenizer
-tokenizer = PleiasTokenizer().base
+from tokenizer.sp_tok import SPTokenizer
+tokenizer = SPTokenizer("unigram_8k.model")
+print(tokenizer.special_tokens_map)
+print(f"Tokenizer vocab size: {len(tokenizer)}")
+print(f"Pad token ID: {tokenizer.pad_id}")
+print(f"Pad token piece: {tokenizer.sp.id_to_piece(tokenizer.pad_id)}")
 
-# 20B tokens
+import re
+PARA_RE = re.compile(r"\n{2,}")
+
+def normalize_paragraphs(text):
+    text = PARA_RE.sub(" <par> ", text.strip())
+    return text.replace("\n", " <new> ").strip()
+
+#20B tokens
 def to_stage1(example):
-    if not example.get("synthetic_answer"):
-        return {"text": None}  # Skip
-    # lang_token = f"<lang:{example['language']}>"
-    text = f"<bos> {example['synthetic_answer'].strip()} <eos>"
+    ans = example.get("synthetic_answer")
+    if not ans:
+        return {"text": None}
+
+    ans = normalize_paragraphs(ans.strip())
+
+    text = f"{ans}"
+
     return {"text": text}
+
+
 
 def tokenize(example):
     # Single example
-    tokens = tokenizer(
-        example["text"],
-        add_special_tokens=False,
-        truncation=False,
-        padding=False
-    )
+    tokens = tokenizer(example["text"])
     tokens["length"] = len(tokens["input_ids"])
     return tokens
 
@@ -178,11 +190,9 @@ print(f"✓ Saved to {output_path}")
 
 
 for example in ds.select(range(10)):
-    print(f"  Sample: {tokenizer.decode(example['input_ids'], skip_special_tokens=False)}")
+    print(f"  Sample: {tokenizer.decode(example['input_ids'])}")
     print(f" ILength: {len(example['input_ids'])}")
     print(f"  IDs: {example['input_ids']}")
-    print(f" MLength: {len(example['attention_mask'])}")
-    print(f"  Masked: {example['attention_mask']}")
 
 
 print("\n✓ Pipeline ready")

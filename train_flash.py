@@ -90,10 +90,10 @@ def train_tinydecoder_lm(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TinyDecoder(
         vocab_size=len(tokenizer),
-        d_model=768,
+        d_model=1024,
         n_layers=12,
-        n_heads=12,
-        d_ff=3072,
+        n_heads=16,
+        d_ff=4096,
         max_seq=max_seq_len
     ).to(device)
 
