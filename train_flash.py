@@ -9,7 +9,6 @@ from llm import model
 from utils import get_gpu_stats, init_gpu_monitor, count_parameters
 from torch.utils.data import DataLoader
 
-from llm.model_flash import TinyDecoder
 from data.load_shard import load_synth_shards
 from transformers import DataCollatorWithPadding
 
@@ -49,13 +48,7 @@ def print_param_ids(model):
         print(f"{name}: id={id(param.data)}, shape={tuple(param.shape)}, device={param.device}")
     print("--- End ---\n")
 
-def train_tinydecoder_lm(
-    epochs=4,
-    batch_size=1,
-    lr=1e-4,
-    max_seq_len=1024,
-    save_path=None
-):
+def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_accum=1):
 
     # ----------------------------------
     # Load real tokenized dataset
@@ -88,14 +81,8 @@ def train_tinydecoder_lm(
     # Model
     # ----------------------------------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = TinyDecoder(
-        vocab_size=len(tokenizer),
-        d_model=1024,
-        n_layers=12,
-        n_heads=16,
-        d_ff=4096,
-        max_seq=max_seq_len
-    ).to(device)
+    from llm.model_flash import get_current_model
+    model = get_current_model(vocab_size=len(tokenizer)).to(device)
 
     # print_param_ids(model)
 
@@ -128,7 +115,6 @@ def train_tinydecoder_lm(
     print("\nStarting training...")
     best_loss = float("inf")
     best_state = model.state_dict()
-    batch_accum = 4
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -140,6 +126,7 @@ def train_tinydecoder_lm(
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
     
     start = time.perf_counter()
+    inc_time = start
 
     for epoch in range(epochs):
         model.train()
@@ -163,7 +150,9 @@ def train_tinydecoder_lm(
                 allocated = torch.cuda.memory_allocated(device) / 1024**3
                 reserved = torch.cuda.memory_reserved(device) / 1024**3
                 print(f"Epoch {epoch+1} Step {step} Loss: {loss.item() * batch_accum:.4f} | "
-                      f"Mem: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved")
+                      f"Mem: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved | "
+                      f"Batch: {(time.perf_counter() - inc_time)*(batch_accum):.2f}s")
+                inc_time = time.perf_counter()
 
             loss.backward()
 
@@ -231,8 +220,9 @@ def train_tinydecoder_lm(
 
 if __name__ == "__main__":
     train_tinydecoder_lm(
-        epochs=4,
+        epochs=3,
         batch_size=8,
+        batch_accum=4,
         lr=1e-4,
         save_path="tinydecoder_lm_best_temp.pth"
     )

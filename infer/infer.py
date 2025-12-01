@@ -4,9 +4,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from transformers import AutoTokenizer
-from llm.model_flash import TinyDecoder
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 from tokenizer.pleias_tok import PleiasTokenizer
@@ -15,14 +12,8 @@ tokenizer = PleiasTokenizer().base
 print(f"Tokenizer vocab size: {len(tokenizer)}")
 
 # Load model
-model = TinyDecoder(
-    vocab_size=len(tokenizer),
-    d_model=1024,
-    n_layers=12,
-    n_heads=16,
-    d_ff=4096,
-    max_seq=1024
-).to(device)
+from llm.model_flash import get_current_model
+model = get_current_model(vocab_size=len(tokenizer)).to(device)
 
 checkpoint = torch.load("tinydecoder_lm_best_temp.pth", map_location=device)
 model.load_state_dict(checkpoint)

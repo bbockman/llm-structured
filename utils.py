@@ -1,5 +1,5 @@
-import torch
 import pynvml
+import torch
 
 def init_gpu_monitor():
     pynvml.nvmlInit()
@@ -18,3 +18,7 @@ def get_gpu_stats(handle):
 def count_parameters(model):
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {total_params:,}")
+
+def rms(x):
+    with torch.no_grad():
+        return x.pow(2).mean().sqrt().item()
