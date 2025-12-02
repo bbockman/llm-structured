@@ -141,41 +141,40 @@ class TransformerBlock(nn.Module):
         self._debug_done = False
          
         self.layer_id = "?"
+        self.n_layers= "?"
 
     def forward(self, x, attn_mask=None):
         rm_log = self.debug_rms and (not self._debug_done)
         br_log = self.debug_branch and (not self._debug_done)
 
+        mlp_factor = 0.5 if self.layer_id == 0 else 1.0
+        attn_factor = 1.0
+
         if rm_log:
             print(f"[RMS] layer_in {self.layer_id}: {rms(x):.4f}")
 
-        # Parallel branches: both see the same residual x
-        attn_out = self.attn(self.attn_norm(x), attn_mask=attn_mask)
-        mlp_out  = self.mlp(self.mlp_norm(x))
+        attn_scale = self.branch_scale * self.alpha_attn * attn_factor
+        mlp_scale  = self.branch_scale * self.alpha_mlp * mlp_factor
 
-        # Effective scales (ReZero or fixed)
-        attn_scale = self.branch_scale * self.alpha_attn
-        mlp_scale  = self.branch_scale * self.alpha_mlp
+        attn_delta = attn_scale * self.attn(self.attn_norm(x), attn_mask=attn_mask)
+        attn_out = x + attn_delta
 
-        attn_delta_tensor = attn_scale * attn_out
-        mlp_delta_tensor  = mlp_scale  * mlp_out
-
-        x_after_attn = x + attn_delta_tensor
+        mlp_delta = mlp_scale * self.mlp(self.mlp_norm(attn_out))
+        mlp_out  = attn_out + mlp_delta
 
         if rm_log:
-            print(f"[RMS] layer_after_attn {self.layer_id}: {rms(x_after_attn):.4f}")
+            print(f"[RMS] layer_after_attn {self.layer_id}: {rms(attn_out):.4f}")
 
-        x_out = x_after_attn + mlp_delta_tensor
 
         if rm_log:
-            print(f"[RMS] layer_out {self.layer_id}: {rms(x_out):.4f}")
+            print(f"[RMS] layer_out {self.layer_id}: {rms(mlp_out):.4f}")
             self._debug_done = True and not br_log
 
         if br_log:
             with torch.no_grad():
                 # (B, T, D) -> (B*T, D) -> mean L2 per token
-                attn_delta = attn_delta_tensor.flatten(0, 1).norm(dim=-1).mean().item()
-                mlp_delta  = mlp_delta_tensor.flatten(0, 1).norm(dim=-1).mean().item()
+                attn_delta = attn_delta.flatten(0, 1).norm(dim=-1).mean().item()
+                mlp_delta  = mlp_delta.flatten(0, 1).norm(dim=-1).mean().item()
                 ratio = mlp_delta / (attn_delta + 1e-8)
 
             print(
@@ -186,7 +185,7 @@ class TransformerBlock(nn.Module):
             # Comment out to see multiple steps
             # self._debug_branches_done = True
 
-        return x_out
+        return mlp_out
 
 
 from torch.utils.checkpoint import checkpoint
@@ -218,7 +217,8 @@ class TinyDecoder(nn.Module):
             for _ in range(n_layers)
         ])
         for i, block in enumerate(self.blocks):
-            block.layer_id = i  # for debugging
+            block.layer_id = i 
+            block.n_layers = n_layers
 
         self.ln_f = RMSNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)

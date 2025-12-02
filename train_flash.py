@@ -85,6 +85,7 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     model = get_current_model(vocab_size=len(tokenizer)).to(device)
 
     # print_param_ids(model)
+    # model.load_state_dict(torch.load("tinydecoder_lm_best_134rms.pth", map_location=device))
 
     from torch.backends.cuda import sdp_kernel
     # torch.backends.cuda.matmul.allow_tf32 = True
@@ -97,7 +98,7 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     )
 
 
-    # model.load_state_dict(torch.load("tinydecoder_lm_best.pth", map_location=device))
+    
 
     print(model)
     count_parameters(model)
@@ -146,7 +147,7 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
                                         attention_mask=attention_mask, 
                                         labels=input_ids)/batch_accum
 
-            if step % 50 == 0:
+            if step % 250 == 0:
                 allocated = torch.cuda.memory_allocated(device) / 1024**3
                 reserved = torch.cuda.memory_reserved(device) / 1024**3
                 print(f"Epoch {epoch+1} Step {step} Loss: {loss.item() * batch_accum:.4f} | "
@@ -220,9 +221,9 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
 
 if __name__ == "__main__":
     train_tinydecoder_lm(
-        epochs=4,
+        epochs=1,
         batch_size=6,
         batch_accum=6,
         lr=1e-4,
-        save_path="tinydecoder_lm_best_134rms.pth"
+        save_path="tinydecoder_lm_best_134mlp.pth"
     )
