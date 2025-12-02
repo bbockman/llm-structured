@@ -278,6 +278,10 @@ class TinyDecoder(nn.Module):
         )
         
         return loss
+    
+    @property
+    def max_seq_len(self):
+        return self.max_seq_len
 
 def get_current_model(max_seq_len=1024, vocab_size=8192, dmodel=1024, n_layers=12, n_heads=16, d_ff=4096):
     return TinyDecoder(

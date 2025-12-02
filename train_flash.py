@@ -220,9 +220,9 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
 
 if __name__ == "__main__":
     train_tinydecoder_lm(
-        epochs=3,
-        batch_size=8,
-        batch_accum=4,
+        epochs=4,
+        batch_size=6,
+        batch_accum=6,
         lr=1e-4,
-        save_path="tinydecoder_lm_best_temp.pth"
+        save_path="tinydecoder_lm_best_134rms.pth"
     )
