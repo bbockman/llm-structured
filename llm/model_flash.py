@@ -113,11 +113,10 @@ class TransformerBlock(nn.Module):
         debug_branch=False,
         use_rezero=True,     
         branch_scale=1.0,    # depth-aware scale (e.g. 1/sqrt(2 * n_layers))
-        alpha_init=0.0,      # ReZero init; effective = alpha_init * branch_scale
+        alpha_init=1.0,      # effective = alpha_init * branch_scale
     ):
         super().__init__()
 
-        # Two separate pre-norms (parallel branches)
         self.attn_norm = RMSNorm(d_model)
         self.mlp_norm  = RMSNorm(d_model)
 
@@ -128,11 +127,9 @@ class TransformerBlock(nn.Module):
         self.branch_scale = branch_scale
 
         if use_rezero:
-            # ReZero: learnable scalars, small effective init via branch_scale
             self.alpha_attn = nn.Parameter(torch.full((1,), alpha_init))
             self.alpha_mlp  = nn.Parameter(torch.full((1,), alpha_init))
         else:
-            # Simple parallel: fixed α=1, still scaled by branch_scale
             self.register_buffer("alpha_attn", torch.tensor(1.0))
             self.register_buffer("alpha_mlp",  torch.tensor(1.0))
 
@@ -147,7 +144,7 @@ class TransformerBlock(nn.Module):
         rm_log = self.debug_rms and (not self._debug_done)
         br_log = self.debug_branch and (not self._debug_done)
 
-        mlp_factor = 0.5 if self.layer_id == 0 else 1.0
+        mlp_factor = 1.0 # self.layer_id / (self.n_layers - 1)
         attn_factor = 1.0
 
         if rm_log:
@@ -168,7 +165,6 @@ class TransformerBlock(nn.Module):
 
         if rm_log:
             print(f"[RMS] layer_out {self.layer_id}: {rms(mlp_out):.4f}")
-            self._debug_done = True and not br_log
 
         if br_log:
             with torch.no_grad():
@@ -228,14 +224,50 @@ class TinyDecoder(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        """Initialize weights with proper scale"""
+        """Custom init: 
+           - embedding: normal(0, 0.02)
+           - attention projections: Xavier uniform
+           - other Linear layers (MLP etc.): He/Kaiming uniform
+        """
         std = 0.02
+        # embedding (and thus lm_head, since weights are tied)
         nn.init.normal_(self.embed.weight, mean=0.0, std=std)
-        # Don't init lm_head.weight - it's tied to embed!
-        
+
         for module in self.modules():
-            if isinstance(module, nn.Linear) and module is not self.lm_head:
-                nn.init.normal_(module.weight, mean=0.0, std=std)
+            # --- Attention projections: Xavier ---
+            if isinstance(module, CausalSelfAttention):
+                # q, k, v, out all Xavier
+                nn.init.xavier_uniform_(module.to_q.weight)
+                nn.init.xavier_uniform_(module.to_k.weight)
+                nn.init.xavier_uniform_(module.to_v.weight)
+                nn.init.xavier_uniform_(module.to_out.weight)
+                # they’re bias=False in your code, so nothing to do for bias
+
+            # --- SwiGLU MLP: He/Kaiming ---
+            elif isinstance(module, SwiGLU):
+                # w1: d_model -> d_ff (then split + SiLU)
+                nn.init.kaiming_uniform_(
+                    module.w1.weight,
+                    a=0.0,
+                    mode='fan_in',
+                    nonlinearity='relu'  # good enough proxy for SiLU
+                )
+                # w2: (d_ff/2) -> d_model, linear after gated activation
+                nn.init.kaiming_uniform_(
+                    module.w2.weight,
+                    a=0.0,
+                    mode='fan_in',
+                    nonlinearity='linear'
+                )
+
+            # --- Any other Linear (e.g. stray heads) : He ---
+            elif isinstance(module, nn.Linear) and module is not self.lm_head:
+                nn.init.kaiming_uniform_(
+                    module.weight,
+                    a=0.0,
+                    mode='fan_in',
+                    nonlinearity='relu'
+                )
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
