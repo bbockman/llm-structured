@@ -224,5 +224,5 @@ if __name__ == "__main__":
         batch_size=6,
         batch_accum=6,
         lr=1e-4,
-        save_path="params_mlp_seqrz.pth"
+        save_path="params_134postnorms.pth"
     )

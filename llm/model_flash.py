@@ -109,11 +109,11 @@ from utils import rms
 
 class TransformerBlock(nn.Module):
     def __init__(self, d_model, n_heads, d_ff, rotary_emb,
-        debug_rms=True,
-        debug_branch=True,
+        debug_rms=False,
+        debug_branch=False,
         use_rezero=True,     
-        branch_scale=1.0,    # depth-aware scale (e.g. 1/sqrt(2 * n_layers))
-        alpha_init=1.0,      # effective = alpha_init * branch_scale
+        branch_scale=1.0,    
+        alpha_init=0.0,      
     ):
         super().__init__()
 
@@ -138,33 +138,28 @@ class TransformerBlock(nn.Module):
         self._debug_done = False
          
         self.layer_id = "?"
-        self.n_layers= "?"
 
     def forward(self, x, attn_mask=None):
         rm_log = self.debug_rms and (not self._debug_done)
         br_log = self.debug_branch and (not self._debug_done)
 
-        mlp_factor = 1.0 # self.layer_id / (self.n_layers - 1)
-        attn_factor = 1.0
-
         if rm_log:
             print(f"[RMS] layer_in {self.layer_id}: {rms(x):.4f}")
 
-        attn_scale = self.branch_scale * self.alpha_attn * attn_factor
-        mlp_scale  = self.branch_scale * self.alpha_mlp * mlp_factor
+        attn_out = self.attn(self.attn_norm(x), attn_mask=attn_mask)
+        mlp_out  = self.mlp(self.mlp_norm(x))
 
-        attn_delta = attn_scale * self.attn(self.attn_norm(x), attn_mask=attn_mask)
-        attn_out = x + attn_delta
+        attn_scale = self.branch_scale * self.alpha_attn
+        mlp_scale  = self.branch_scale * self.alpha_mlp
 
-        mlp_delta = mlp_scale * self.mlp(self.mlp_norm(attn_out))
-        mlp_out  = attn_out + mlp_delta
+        attn_delta = attn_scale * attn_out
+        mlp_delta  = mlp_scale  * mlp_out
 
-        if rm_log:
-            print(f"[RMS] layer_after_attn {self.layer_id}: {rms(attn_out):.4f}")
-
+        x_out = x + attn_delta + mlp_delta
 
         if rm_log:
-            print(f"[RMS] layer_out {self.layer_id}: {rms(mlp_out):.4f}")
+            print(f"[RMS] layer_out {self.layer_id}: {rms(x_out):.4f}")
+            self._debug_done = True and not br_log
 
         if br_log:
             with torch.no_grad():
@@ -177,11 +172,9 @@ class TransformerBlock(nn.Module):
                 f"[Δ] layer {self.layer_id}: "
                 f"attn={attn_delta:.4f}, mlp={mlp_delta:.4f}, ratio={ratio:.2f}"
             )
-
-            # Comment out to see multiple steps
             # self._debug_branches_done = True
 
-        return mlp_out
+        return x_out
 
 
 from torch.utils.checkpoint import checkpoint
@@ -213,13 +206,11 @@ class TinyDecoder(nn.Module):
             for _ in range(n_layers)
         ])
         for i, block in enumerate(self.blocks):
-            block.layer_id = i 
-            block.n_layers = n_layers
+            block.layer_id = i  # for debugging
 
         self.ln_f = RMSNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
 
-        # weight tying
         self.lm_head.weight = self.embed.weight
         self._init_weights()
 
@@ -227,7 +218,6 @@ class TinyDecoder(nn.Module):
         """Initialize weights with proper scale"""
         std = 0.02
         nn.init.normal_(self.embed.weight, mean=0.0, std=std)
-        # Don't init lm_head.weight - it's tied to embed!
         
         for module in self.modules():
             if isinstance(module, nn.Linear) and module is not self.lm_head:
