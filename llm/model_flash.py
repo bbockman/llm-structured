@@ -224,50 +224,14 @@ class TinyDecoder(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        """Custom init: 
-           - embedding: normal(0, 0.02)
-           - attention projections: Xavier uniform
-           - other Linear layers (MLP etc.): He/Kaiming uniform
-        """
+        """Initialize weights with proper scale"""
         std = 0.02
-        # embedding (and thus lm_head, since weights are tied)
         nn.init.normal_(self.embed.weight, mean=0.0, std=std)
-
+        # Don't init lm_head.weight - it's tied to embed!
+        
         for module in self.modules():
-            # --- Attention projections: Xavier ---
-            if isinstance(module, CausalSelfAttention):
-                # q, k, v, out all Xavier
-                nn.init.xavier_uniform_(module.to_q.weight)
-                nn.init.xavier_uniform_(module.to_k.weight)
-                nn.init.xavier_uniform_(module.to_v.weight)
-                nn.init.xavier_uniform_(module.to_out.weight)
-                # they’re bias=False in your code, so nothing to do for bias
-
-            # --- SwiGLU MLP: He/Kaiming ---
-            elif isinstance(module, SwiGLU):
-                # w1: d_model -> d_ff (then split + SiLU)
-                nn.init.kaiming_uniform_(
-                    module.w1.weight,
-                    a=0.0,
-                    mode='fan_in',
-                    nonlinearity='relu'  # good enough proxy for SiLU
-                )
-                # w2: (d_ff/2) -> d_model, linear after gated activation
-                nn.init.kaiming_uniform_(
-                    module.w2.weight,
-                    a=0.0,
-                    mode='fan_in',
-                    nonlinearity='linear'
-                )
-
-            # --- Any other Linear (e.g. stray heads) : He ---
-            elif isinstance(module, nn.Linear) and module is not self.lm_head:
-                nn.init.kaiming_uniform_(
-                    module.weight,
-                    a=0.0,
-                    mode='fan_in',
-                    nonlinearity='relu'
-                )
+            if isinstance(module, nn.Linear) and module is not self.lm_head:
+                nn.init.normal_(module.weight, mean=0.0, std=std)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
