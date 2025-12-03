@@ -85,9 +85,9 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     model = get_current_model(vocab_size=len(tokenizer)).to(device)
 
     # print_param_ids(model)
-    # missing = model.load_state_dict(torch.load("tinydecoder_lm_best_134mlp_seqrz.pth", map_location=device), strict=False)
-    # print("Missing keys:", missing.missing_keys)
-    # print("Unexpected keys:", missing.unexpected_keys)
+    missing = model.load_state_dict(torch.load("params_134mlp_seqrzoldinit.pth", map_location=device), strict=False)
+    print("Missing keys:", missing.missing_keys)
+    print("Unexpected keys:", missing.unexpected_keys)
 
     from torch.backends.cuda import sdp_kernel
     # torch.backends.cuda.matmul.allow_tf32 = True

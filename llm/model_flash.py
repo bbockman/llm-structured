@@ -109,8 +109,8 @@ from utils import rms
 
 class TransformerBlock(nn.Module):
     def __init__(self, d_model, n_heads, d_ff, rotary_emb,
-        debug_rms=False,
-        debug_branch=False,
+        debug_rms=True,
+        debug_branch=True,
         use_rezero=True,     
         branch_scale=1.0,    # depth-aware scale (e.g. 1/sqrt(2 * n_layers))
         alpha_init=1.0,      # effective = alpha_init * branch_scale
