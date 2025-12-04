@@ -127,7 +127,7 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     # torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
     
-    global_sdpa_ctx = sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION],set_priority=False)
+    global_sdpa_ctx = sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION],set_priority=True)
     global_sdpa_ctx.__enter__()  # manual “start”
     # global_sdpa_ctx.__exit__(None, None, None)  # if you ever want to shut it off
 
