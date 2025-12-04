@@ -118,9 +118,6 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     else:
         print(f"Starting fresh training without warmup...")
 
-    best_loss = float("inf")
-    best_state = model.state_dict()
-    optim_state = optimizer.state_dict()
  
     from torch.nn.attention import sdpa_kernel, SDPBackend
     from torch.amp import autocast, GradScaler
@@ -164,18 +161,17 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
                 inc_time = time.perf_counter()
 
             scaler.scale(loss).backward()
-            loss_d = loss.item()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
+            running_loss += loss.item() * batch_accum
+
             if step % batch_accum == batch_accum - 1 or step == len(loader) - 1:
-                loss_d = loss_d * batch_accum / (step % batch_accum + 1)
+                loss = loss * batch_accum / (step % batch_accum + 1)
                 scaler.step(optimizer)
                 scaler.update()
-
-            running_loss += loss_d 
             
-            del input_ids, attention_mask, loss, loss_d
+            del input_ids, attention_mask, loss
             
             if step % 100 == 0 and step > 0:
                 torch.cuda.empty_cache()
@@ -206,17 +202,16 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
         # Reset peak stats
         torch.cuda.reset_peak_memory_stats(device)
 
-        epoch_loss = running_loss / len(loader)
-
-        # Track best
-        if epoch_loss < best_loss:
-            best_loss = epoch_loss
-            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-            optim_state = optimizer.state_dict()
-            for state in optim_state["state"].values():
-                for k, v in state.items():
-                    if torch.is_tensor(v):
-                        state[k] = v.detach().cpu().clone()
+        if save_path:
+            checkpoint = {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            #"scheduler": scheduler.state_dict() if scheduler is not None else None,
+            #"epoch": epoch,
+            #"step": global_step,
+        }
+            torch.save(checkpoint, save_path)
+            print(f"Saved best model to {save_path}")
 
 
     # ----------------------------------
@@ -224,24 +219,11 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     # ----------------------------------
     elapsed = time.perf_counter() - start
     print(f"\nTraining completed in {elapsed:.2f}s")
-    print(f"Best epoch loss = {best_loss:.4f}")
 
-
-    if save_path:
-        checkpoint = {
-        "model": best_state,
-        "optimizer": optim_state,
-        #"scheduler": scheduler.state_dict() if scheduler is not None else None,
-        #"epoch": epoch,
-        #"step": global_step,
-    }
-        torch.save(checkpoint, save_path)
-        print(f"Saved best model to {save_path}")
-
-    return model, best_state, best_loss
+    return model
 
 if __name__ == "__main__":
-    train_tinydecoder_lm(epochs=1,batch_size=6,batch_accum=6,lr=1e-4,save_path="warmup.pth",warmup=11_000)
+    # train_tinydecoder_lm(epochs=1,batch_size=6,batch_accum=6,lr=1e-4,save_path="warmup.pth",warmup=11_000)
 
     train_tinydecoder_lm(
         epochs=4,
@@ -249,5 +231,5 @@ if __name__ == "__main__":
         batch_accum=6,
         lr=1e-4,
         load_path="warmup.pth",
-        save_path="params_134postnorms.pth"
+        save_path="params_134autocast.pth"
     )
