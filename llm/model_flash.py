@@ -90,13 +90,12 @@ class CausalSelfAttention(nn.Module):
         v = v.permute(0, 2, 1, 3)
 
         # Prepare attention mask: (B, 1, 1, T)
-        if attn_mask is not None:
-            attn_mask = attn_mask.view(B, 1, 1, T).bool()
+        # if attn_mask is not None:
+        #     attn_mask = attn_mask.view(B, 1, 1, T).bool()
 
         # SDPA handles causal masking internally when is_causal=True
         out = torch.nn.functional.scaled_dot_product_attention(
             q, k, v,
-            attn_mask=attn_mask,
             is_causal=True
         )
 

@@ -67,12 +67,6 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
 
     # print_param_ids(model)  
 
-    from torch.backends.cuda import sdp_kernel
-    # torch.backends.cuda.matmul.allow_tf32 = True
-    # torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-
-    torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True)
-
     print(model)
     count_parameters(model)
 
@@ -127,6 +121,17 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     best_loss = float("inf")
     best_state = model.state_dict()
     optim_state = optimizer.state_dict()
+ 
+    from torch.nn.attention import sdpa_kernel, SDPBackend
+    from torch.amp import autocast, GradScaler
+    # torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
+    
+    global_sdpa_ctx = sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION],set_priority=False)
+    global_sdpa_ctx.__enter__()  # manual “start”
+    # global_sdpa_ctx.__exit__(None, None, None)  # if you ever want to shut it off
+
+    scaler = GradScaler(device="cuda", enabled=False)  # Disable for now
 
     for epoch in range(epochs):
         model.train()
@@ -144,7 +149,8 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
             if step % batch_accum == 0:
                 optimizer.zero_grad()
 
-            loss = model.compute_loss(input_ids, 
+            with autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True, cache_enabled=False):
+                loss = model.compute_loss(input_ids, 
                                         pad_id=tokenizer.pad_token_id,
                                         attention_mask=attention_mask, 
                                         labels=input_ids)/batch_accum
@@ -157,23 +163,20 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
                       f"Batch: {(time.perf_counter() - inc_time)*(batch_accum):.2f}s")
                 inc_time = time.perf_counter()
 
-            loss.backward()
+            scaler.scale(loss).backward()
             loss_d = loss.item()
 
-            # ✅ Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            # only changed loss scaling since initial git commit with flash model save
             if step % batch_accum == batch_accum - 1 or step == len(loader) - 1:
                 loss_d = loss_d * batch_accum / (step % batch_accum + 1)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
 
             running_loss += loss_d 
             
-            # ✅ Explicit cleanup
             del input_ids, attention_mask, loss, loss_d
             
-            # ✅ Clear cache periodically
             if step % 100 == 0 and step > 0:
                 torch.cuda.empty_cache()
             
@@ -183,7 +186,6 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
         if warmup is None:
             scheduler.step()
         
-        # ✅ End of epoch cleanup
         torch.cuda.empty_cache()
         gc.collect()
         

@@ -11,8 +11,8 @@ ds = load_synth_shards(num_shards=1, total_shards=10, pattern_prefix="data")
 loader = DataLoader(ds, batch_size=2, collate_fn=sp_pad_collator)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
-checkpoint = torch.load("tinydecoder_lm_best_134mlp.pth", map_location=device)
-model.load_state_dict(checkpoint)
+checkpoint = torch.load("params_134poostnorms.pth", map_location=device)
+model.load_state_dict(checkpoint['model'])
 model.eval()
 
 with torch.no_grad():
