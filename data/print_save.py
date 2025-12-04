@@ -4,11 +4,10 @@ from torch.utils.data import DataLoader
 
 # Disable all caching - process in-memory only
 disable_caching()
-
 # Load the already-processed Arrow files (Stage 1 training data)
 PROCESSED_BASE = "/mnt/xd/ml/hf/datasets/synth_stage1_formatted/"
 
-from load_shard import load_synth_shards
+from data.load_shard import load_synth_shards
 # Load directly - this won't create duplicates since it's already in the datasets cache format
 ds = load_synth_shards(num_shards=1, base_path=PROCESSED_BASE, pattern_prefix="data", total_shards=10)
 

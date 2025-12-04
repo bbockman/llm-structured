@@ -6,3 +6,5 @@ reference
 **/scratch**
 **/*.pth
 **/*.deb
+**/disk/**
+**/*.arrow

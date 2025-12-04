@@ -14,8 +14,8 @@ print(f"Tokenizer vocab size: {len(tokenizer)}")
 from llm.model_flash import get_current_model
 model = get_current_model(vocab_size=len(tokenizer)).to(device)
 
-checkpoint = torch.load("tinydecoder_lm_best_134mlp_seqrz.pth", map_location=device)
-model.load_state_dict(checkpoint)
+checkpoint = torch.load("disk/models/llm-scoped/params_134autocast.pth", map_location=device)
+model.load_state_dict(checkpoint["model"])
 model = model.to(device)
 model.eval()
 

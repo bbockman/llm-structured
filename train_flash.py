@@ -223,13 +223,14 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     return model
 
 if __name__ == "__main__":
-    # train_tinydecoder_lm(epochs=1,batch_size=6,batch_accum=6,lr=1e-4,save_path="warmup.pth",warmup=11_000)
+    # train_tinydecoder_lm(epochs=1,batch_size=6,batch_accum=6,lr=1e-4,warmup=11_000,
+    #                      save_path="disk/models/llm-scoped/warmup.pth")
 
     train_tinydecoder_lm(
         epochs=4,
         batch_size=6,
         batch_accum=6,
         lr=1e-4,
-        load_path="warmup.pth",
-        save_path="params_134autocast.pth"
+        load_path="disk/models/llm-scoped/warmup.pth",
+        save_path="disk/models/llm-scoped/params_134autocast.pth"
     )

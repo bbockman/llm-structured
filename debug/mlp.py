@@ -22,7 +22,7 @@ data_collator = DataCollatorWithPadding(tokenizer=tokenizer, padding=True, retur
 loader = DataLoader(ds, batch_size=6, shuffle=False, num_workers=12, collate_fn=data_collator)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
-checkpoint = torch.load("params_134postnorms.pth", map_location=device)
+checkpoint = torch.load("disk/models/llm-scoped/params_134autocast.pth", map_location=device)
 model.load_state_dict(checkpoint['model'])
 model.eval()
 

@@ -15,7 +15,7 @@ print(f"Tokenizer vocab size: {len(tokenizer)}")
 from llm.model_flash import get_current_model
 model = get_current_model(vocab_size=len(tokenizer)).to(device)
 
-checkpoint = torch.load("params_134postnorms.pth", map_location=device)
+checkpoint = torch.load("disk/models/llm-scoped/params_134autocast.pth", map_location=device)
 model.load_state_dict(checkpoint['model'])
 model = model.to(device)
 model.eval()
@@ -28,7 +28,7 @@ print("Model loaded successfully!")
 @torch.no_grad()
 def generate(
     prompt,
-    max_new_tokens=1024,
+    max_tokens=1024,
     temperature=0.8,
     top_k=50,
     top_p=0.9,
@@ -45,7 +45,7 @@ def generate(
     
     generated_tokens = []
     
-    for step in range(max_new_tokens):
+    for step in range(max_tokens-input_ids.shape[1]):
         logits = model(input_ids)
         next_token_logits = logits[0, -1, :] / temperature
         
@@ -101,7 +101,7 @@ print("="*80)
 
 output = generate(
     f"{tokenizer.bos_token} Translation regulation in plants operates through multiple coordinated mechanisms including initiation",
-    max_new_tokens=1024,
+    max_tokens=1024,
     temperature=1.0,
     top_k=0,
     top_p=1.0,
