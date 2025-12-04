@@ -1,19 +1,13 @@
 import time
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR
 import gc
 
-from llm import model
 from utils import get_gpu_stats, init_gpu_monitor, count_parameters
 from torch.utils.data import DataLoader
 
 from data.load_shard import load_synth_shards
 from transformers import DataCollatorWithPadding
 
-# ============================================================
-# TOKENIZER (same as smoke test)
 # ============================================================
 from tokenizer.pleias_tok import PleiasTokenizer
 tokenizer = PleiasTokenizer().base
@@ -48,11 +42,8 @@ def print_param_ids(model):
         print(f"{name}: id={id(param.data)}, shape={tuple(param.shape)}, device={param.device}")
     print("--- End ---\n")
 
-def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_accum=1):
+def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_accum=1, warmup=None, load_path=None):
 
-    # ----------------------------------
-    # Load real tokenized dataset
-    # ----------------------------------
     print("Loading dataset...")
     ds = load_synth_shards(
         num_shards=1,
@@ -63,19 +54,9 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     print(f"Loaded {len(ds)} examples")
     print(f"Columns: {ds.column_names}")
 
-    data_collator = DataCollatorWithPadding(
-        tokenizer=tokenizer,
-        padding=True,
-        return_tensors="pt"
-    )
+    data_collator = DataCollatorWithPadding(tokenizer=tokenizer, padding=True, return_tensors="pt")
 
-    loader = DataLoader(
-        ds,
-        batch_size=batch_size,
-        shuffle=False,  # ✅ No shuffle for repeatability
-        num_workers=12,
-        collate_fn=data_collator
-    )
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=12, collate_fn=data_collator)
 
     # ----------------------------------
     # Model
@@ -84,20 +65,13 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     from llm.model_flash import get_current_model
     model = get_current_model(vocab_size=len(tokenizer)).to(device)
 
-    # print_param_ids(model)
-    missing = model.load_state_dict(torch.load("params_134mlp_seqrzoldinit.pth", map_location=device), strict=False)
-    print("Missing keys:", missing.missing_keys)
-    print("Unexpected keys:", missing.unexpected_keys)
+    # print_param_ids(model)  
 
     from torch.backends.cuda import sdp_kernel
     # torch.backends.cuda.matmul.allow_tf32 = True
     # torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
 
-    torch.backends.cuda.sdp_kernel(
-        enable_flash=True,
-        enable_math=False,
-        enable_mem_efficient=True,
-    )
+    torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True)
 
     print(model)
     count_parameters(model)
@@ -112,21 +86,47 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     # ----------------------------------
     # Training loop
     # ----------------------------------
-    print("\nStarting training...")
-    best_loss = float("inf")
-    best_state = model.state_dict()
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=lr,
-        weight_decay=1e-2
-    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
 
+    from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR
 
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
+    if warmup is None:
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs-1, eta_min=lr / 10)
+    else:
+        scheduler = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup)
     
+    if load_path is not None:
+        chkp = torch.load(load_path, map_location=device)
+        missing = model.load_state_dict(chkp["model"], strict=False)
+        if "optimizer" in chkp and chkp["optimizer"] is not None:
+            optimizer.load_state_dict(chkp["optimizer"])
+        else:
+            print("No optimizer state found in checkpoint.")
+        if "scheduler" in chkp and chkp["scheduler"] is not None:
+            scheduler.load_state_dict(chkp["scheduler"])
+        else:
+            print("No scheduler state found in checkpoint.")
+            
+        print(f"Loaded saved params from {load_path}")
+        print("Missing keys:", missing.missing_keys)
+        print("Unexpected keys:", missing.unexpected_keys)
+
     start = time.perf_counter()
     inc_time = start
+
+    if warmup is not None and load_path is not None:
+        print("Warning: Both warmup and load_path are set. Warmup will override the scheduler from the checkpoint.")
+    elif warmup is not None:
+        print(f"Starting warmup for {warmup} steps...")
+    elif load_path is not None:
+        print(f"Resuming training from {load_path}...")
+    else:
+        print(f"Starting fresh training without warmup...")
+
+    best_loss = float("inf")
+    best_state = model.state_dict()
+    optim_state = optimizer.state_dict()
 
     for epoch in range(epochs):
         model.train()
@@ -135,6 +135,9 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
         get_tensor_memory() 
 
         for step, batch in enumerate(loader):
+            if warmup is not None and (step >= warmup or epoch * len(loader) + step >= warmup):
+                break
+
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
 
@@ -155,25 +158,30 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
                 inc_time = time.perf_counter()
 
             loss.backward()
+            loss_d = loss.item()
 
             # ✅ Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             # only changed loss scaling since initial git commit with flash model save
             if step % batch_accum == batch_accum - 1 or step == len(loader) - 1:
-                loss = loss * batch_accum / (step % batch_accum + 1)
+                loss_d = loss_d * batch_accum / (step % batch_accum + 1)
                 optimizer.step()
 
-            running_loss += loss.item() * batch_accum 
+            running_loss += loss_d 
             
             # ✅ Explicit cleanup
-            del input_ids, attention_mask, loss
+            del input_ids, attention_mask, loss, loss_d
             
             # ✅ Clear cache periodically
             if step % 100 == 0 and step > 0:
                 torch.cuda.empty_cache()
+            
+            if warmup is not None:
+                scheduler.step()
 
-        scheduler.step()
+        if warmup is None:
+            scheduler.step()
         
         # ✅ End of epoch cleanup
         torch.cuda.empty_cache()
@@ -201,7 +209,12 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
         # Track best
         if epoch_loss < best_loss:
             best_loss = epoch_loss
-            best_state = model.state_dict()
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            optim_state = optimizer.state_dict()
+            for state in optim_state["state"].values():
+                for k, v in state.items():
+                    if torch.is_tensor(v):
+                        state[k] = v.detach().cpu().clone()
 
 
     # ----------------------------------
@@ -213,16 +226,26 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
 
 
     if save_path:
-        torch.save(best_state, save_path)
+        checkpoint = {
+        "model": best_state,
+        "optimizer": optim_state,
+        #"scheduler": scheduler.state_dict() if scheduler is not None else None,
+        #"epoch": epoch,
+        #"step": global_step,
+    }
+        torch.save(checkpoint, save_path)
         print(f"Saved best model to {save_path}")
 
     return model, best_state, best_loss
 
 if __name__ == "__main__":
+    train_tinydecoder_lm(epochs=1,batch_size=6,batch_accum=6,lr=1e-4,save_path="warmup.pth",warmup=11_000)
+
     train_tinydecoder_lm(
         epochs=4,
         batch_size=6,
         batch_accum=6,
         lr=1e-4,
+        load_path="warmup.pth",
         save_path="params_134postnorms.pth"
     )

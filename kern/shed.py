@@ -1,3 +1,17 @@
+def cosine_lr(t, T, eta_max, eta_min):
+    if T <= 1:
+        return eta_min  # or eta_max; define your convention
+    cos_inner = math.pi * t / (T - 1)
+    return eta_min + 0.5 * (eta_max - eta_min) * (1 + math.cos(cos_inner))
+
+T = total_updates  # e.g. num_epochs * steps_per_epoch
+
+for t in range(T):  # t is your "global step index"
+    lr = cosine_lr(t, T, eta_max, eta_min)
+    for group in optimizer.param_groups:
+        group["lr"] = lr
+    # run one update (forward/backward/step) here...
+
 import math
 from torch.optim.lr_scheduler import LambdaLR
 
