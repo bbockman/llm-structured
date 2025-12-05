@@ -158,7 +158,7 @@ class TransformerBlock(nn.Module):
 
         if rm_log:
             print(f"[RMS] layer_out {self.layer_id}: {rms(x_out):.4f}")
-            self._debug_done = True and not br_log
+            # self._debug_done = True and not br_log
 
         if br_log:
             with torch.no_grad():
@@ -268,7 +268,7 @@ class TinyDecoder(nn.Module):
     def max_seq_len(self):
         return self.max_seq_len
 
-def get_current_model(max_seq_len=1024, vocab_size=8192, dmodel=1024, n_layers=12, n_heads=16, d_ff=4096):
+def get_current_model(max_seq_len=1024, vocab_size=8192, dmodel=1536, n_layers=24, n_heads=24, d_ff=4096):
     return TinyDecoder(
         vocab_size=vocab_size,
         d_model=dmodel,

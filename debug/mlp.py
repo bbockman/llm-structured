@@ -4,7 +4,6 @@ from tokenizer.pleias_tok import PleiasTokenizer
 import torch
 from torch.utils.data import DataLoader
 from data.load_shard import load_synth_shards
-from data.colate import sp_pad_collator
 
 tokenizer = PleiasTokenizer().base
 model = get_current_model(vocab_size=len(tokenizer))

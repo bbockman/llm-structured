@@ -7,49 +7,44 @@ from torch.utils.data import DataLoader
 
 from data.load_shard import load_synth_shards
 from transformers import DataCollatorWithPadding
+from llm.model_flash import get_current_model
+from torch.nn.attention import sdpa_kernel, SDPBackend
+from torch.amp import autocast, GradScaler
+from tokenizer.pleias_tok import PleiasTokenizer
+from utils import get_tensor_memory
+from kern.shed import cosine_with_warmup
 
 # ============================================================
-from tokenizer.pleias_tok import PleiasTokenizer
+
 tokenizer = PleiasTokenizer().base
-
 print(f"Tokenizer vocab size: {len(tokenizer)}")
+WARMUP = 11_000
 
-def get_tensor_memory():
-    import gc
-    import torch
-    from collections import defaultdict
+def train_tinydecoder_lm(
+        epochs=4, 
+        batch_size=1, 
+        lr=1e-4, 
+        save_path=None, 
+        batch_accum=1, 
+        warmup=None, 
+        load_path=None,
+        global_step=0,
+        total_steps=1024*64*2,
+        start_shard=0,
+        num_shards=1,
+        total_shards=10,
+        round=1
+    ):
 
-    summary = defaultdict(lambda: {"count": 0, "total_mb": 0.0})
-    for obj in gc.get_objects():
-        try:
-            if torch.is_tensor(obj):
-                key = (str(obj.dtype), tuple(obj.shape), str(obj.device))
-                size_mb = obj.element_size() * obj.nelement() / 1024**2
-                summary[key]["count"] += 1
-                summary[key]["total_mb"] += size_mb
-        except Exception:
-            pass
-
-    print("\n--- Tensor Memory Summary ---")
-    for key, val in summary.items():
-        dtype, shape, device = key
-        print(f"{val['count']:3d}x {dtype} {shape} on {device}: {val['total_mb']:.2f} MB")
-    print("--- End of Summary ---\n")
-
-def print_param_ids(model):
-    print("\n--- Model Parameter IDs ---")
-    for name, param in model.named_parameters():
-        print(f"{name}: id={id(param.data)}, shape={tuple(param.shape)}, device={param.device}")
-    print("--- End ---\n")
-
-def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_accum=1, warmup=None, load_path=None):
+    start_step = global_step
 
     print("Loading dataset...")
     ds = load_synth_shards(
-        num_shards=1,
+        start_shard=start_shard,
+        num_shards=num_shards,
         base_path="/mnt/xd/ml/hf/datasets/synth_stage1_formatted/",
         pattern_prefix="data",
-        total_shards=10
+        total_shards=total_shards
     )
     print(f"Loaded {len(ds)} examples")
     print(f"Columns: {ds.column_names}")
@@ -62,10 +57,7 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     # Model
     # ----------------------------------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    from llm.model_flash import get_current_model
     model = get_current_model(vocab_size=len(tokenizer)).to(device)
-
-    # print_param_ids(model)  
 
     print(model)
     count_parameters(model)
@@ -75,20 +67,9 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     # ----------------------------------
     gpu_handle = init_gpu_monitor()
     get_gpu_stats(gpu_handle)
-    # torch.cuda.memory_unified()
     
-    # ----------------------------------
-    # Training loop
-    # ----------------------------------
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
-
-    from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR
-
-    if warmup is None:
-        scheduler = CosineAnnealingLR(optimizer, T_max=epochs-1, eta_min=lr / 10)
-    else:
-        scheduler = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup)
     
     if load_path is not None:
         chkp = torch.load(load_path, map_location=device)
@@ -97,31 +78,14 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
             optimizer.load_state_dict(chkp["optimizer"])
         else:
             print("No optimizer state found in checkpoint.")
-        if "scheduler" in chkp and chkp["scheduler"] is not None:
-            scheduler.load_state_dict(chkp["scheduler"])
-        else:
-            print("No scheduler state found in checkpoint.")
+        global_step = chkp.get("step", 0)
+        print(f"Resumed global step: {global_step}")
             
         print(f"Loaded saved params from {load_path}")
         print("Missing keys:", missing.missing_keys)
         print("Unexpected keys:", missing.unexpected_keys)
-
-    start = time.perf_counter()
-    inc_time = start
-
-    if warmup is not None and load_path is not None:
-        print("Warning: Both warmup and load_path are set. Warmup will override the scheduler from the checkpoint.")
-    elif warmup is not None:
-        print(f"Starting warmup for {warmup} steps...")
-    elif load_path is not None:
-        print(f"Resuming training from {load_path}...")
-    else:
-        print(f"Starting fresh training without warmup...")
-
  
-    from torch.nn.attention import sdpa_kernel, SDPBackend
-    from torch.amp import autocast, GradScaler
-    # torch.backends.cuda.matmul.allow_tf32 = True
+
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
     
     global_sdpa_ctx = sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION],set_priority=True)
@@ -129,6 +93,9 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
     # global_sdpa_ctx.__exit__(None, None, None)  # if you ever want to shut it off
 
     scaler = GradScaler(device="cuda", enabled=False)  # Disable for now
+
+    start = time.perf_counter()
+    inc_time = start
 
     for epoch in range(epochs):
         model.train()
@@ -152,10 +119,10 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
                                         attention_mask=attention_mask, 
                                         labels=input_ids)/batch_accum
 
-            if step % 50 == 0:
+            if step % 500 == 0:
                 allocated = torch.cuda.memory_allocated(device) / 1024**3
                 reserved = torch.cuda.memory_reserved(device) / 1024**3
-                print(f"Epoch {epoch+1} Step {step} Loss: {loss.item() * batch_accum:.4f} | "
+                print(f"Round {round} Step {step} Loss: {loss.item() * batch_accum:.4f} | "
                       f"Mem: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved | "
                       f"Batch: {(time.perf_counter() - inc_time)*(batch_accum):.2f}s")
                 inc_time = time.perf_counter()
@@ -168,6 +135,15 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
 
             if step % batch_accum == batch_accum - 1 or step == len(loader) - 1:
                 loss = loss * batch_accum / (step % batch_accum + 1)
+                lr_a = cosine_with_warmup(
+                    step=global_step / batch_accum,
+                    warmup_steps=WARMUP / batch_accum,
+                    total_steps=total_steps / batch_accum,
+                    base_lr=lr,
+                    min_lr=lr / 10,
+                )
+                for group in optimizer.param_groups:
+                    group["lr"] = lr_a
                 scaler.step(optimizer)
                 scaler.update()
             
@@ -175,12 +151,9 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
             
             if step % 100 == 0 and step > 0:
                 torch.cuda.empty_cache()
-            
-            if warmup is not None:
-                scheduler.step()
 
-        if warmup is None:
-            scheduler.step()
+            global_step += 1
+            
         
         torch.cuda.empty_cache()
         gc.collect()
@@ -192,11 +165,12 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
         max_allocated = torch.cuda.max_memory_allocated(device) / 1024**3
         
         print(f"\n{'='*80}")
-        print(f"Epoch {epoch+1} Summary:")
+        print(f"Round {round} Summary:")
         print(f"  Loss: {running_loss / len(loader):.4f}")
         print(f"  GPU Util: {stats['gpu_util']}%")
         print(f"  Current Memory: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved")
         print(f"  Peak Memory: {max_allocated:.2f}GB")
+        print(f"  Steps: {global_step-start_step} this round, {global_step} total")
         print(f"{'='*80}\n")
         
         # Reset peak stats
@@ -206,31 +180,61 @@ def train_tinydecoder_lm(epochs=4, batch_size=1, lr=1e-4, save_path=None, batch_
             checkpoint = {
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
-            #"scheduler": scheduler.state_dict() if scheduler is not None else None,
-            #"epoch": epoch,
-            #"step": global_step,
+            "step": global_step,
         }
             torch.save(checkpoint, save_path)
             print(f"Saved best model to {save_path}")
 
 
-    # ----------------------------------
-    # Finalize
-    # ----------------------------------
     elapsed = time.perf_counter() - start
     print(f"\nTraining completed in {elapsed:.2f}s")
 
-    return model
+    return model, start_shard, num_shards, global_step
 
 if __name__ == "__main__":
-    # train_tinydecoder_lm(epochs=1,batch_size=6,batch_accum=6,lr=1e-4,warmup=11_000,
-    #                      save_path="disk/models/llm-scoped/warmup.pth")
+    
+    warmup = 11_000
+    rounds = 8
+    epochs = 1
+    batch_size = 8
+    steps_per_round = 248_632 // batch_size
+    batch_accum = 6
+    num_shards = 1
+    lr_base = 1e-4
+    total_steps = steps_per_round * rounds + warmup
 
-    train_tinydecoder_lm(
-        epochs=4,
-        batch_size=6,
-        batch_accum=6,
-        lr=1e-4,
+    train_tinydecoder_lm(epochs=1,batch_size=batch_size,batch_accum=batch_accum,lr=lr_base,warmup=WARMUP, round=0,
+                         save_path="disk/models/llm-scoped/warmup.pth")
+
+    _, start, num, _ = train_tinydecoder_lm(
+        epochs=epochs,
+        batch_size=batch_size,
+        batch_accum=batch_accum,
+        lr=lr_base,
         load_path="disk/models/llm-scoped/warmup.pth",
-        save_path="disk/models/llm-scoped/params_134autocast.pth"
+        save_path="disk/models/llm-scoped/params_500autocast.pth",
+        total_steps=total_steps,
+        start_shard=0,
+        num_shards=num_shards,
+        round=1
     )
+    # start = 0
+    # num = 1
+
+    for shards in range(start + num, rounds):
+        next_shard = start + num
+        print(f"\n\n=== Starting training round {shards+2}, loading shard {next_shard} ===\n\n")
+        _, start, num, _ = train_tinydecoder_lm(
+            epochs=epochs,
+            batch_size=batch_size,
+            batch_accum=batch_accum,
+            lr=lr_base,
+            load_path="disk/models/llm-scoped/params_500autocast.pth",
+            save_path="disk/models/llm-scoped/params_500autocast.pth",
+            total_steps=total_steps,
+            start_shard=next_shard,
+            num_shards=num_shards,
+            round=shards + 1
+        )
+    
+    print(f"Last round completed: {rounds}, next start shard {rounds}.")

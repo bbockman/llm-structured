@@ -3,7 +3,7 @@ from pathlib import Path
 
 def load_synth_shards(
     num_shards: int,
-    start_index: int = 0,
+    start_shard: int = 0,
     base_path: str = "disk/hf/datasets/PleIAs___synth/default/0.0.0/6ebe6a97043747aa5f2232ea1182841c4a6afcb0",
     pattern_prefix: str = "synth-train",
     total_shards: int = 500
@@ -27,7 +27,7 @@ def load_synth_shards(
     # Generate list of shard paths
     shards = [
         base / f"{pattern_prefix}-{i:05d}-of-{total_shards:05d}.arrow"
-        for i in range(num_shards)
+        for i in range(start_shard, start_shard+num_shards)
     ]
 
     # Load each shard individually (zero-copy memory map)

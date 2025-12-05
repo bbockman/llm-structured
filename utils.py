@@ -22,3 +22,31 @@ def count_parameters(model):
 def rms(x):
     with torch.no_grad():
         return x.pow(2).mean().sqrt().item()
+    
+def get_tensor_memory():
+    import gc
+    import torch
+    from collections import defaultdict
+
+    summary = defaultdict(lambda: {"count": 0, "total_mb": 0.0})
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj):
+                key = (str(obj.dtype), tuple(obj.shape), str(obj.device))
+                size_mb = obj.element_size() * obj.nelement() / 1024**2
+                summary[key]["count"] += 1
+                summary[key]["total_mb"] += size_mb
+        except Exception:
+            pass
+
+    print("\n--- Tensor Memory Summary ---")
+    for key, val in summary.items():
+        dtype, shape, device = key
+        print(f"{val['count']:3d}x {dtype} {shape} on {device}: {val['total_mb']:.2f} MB")
+    print("--- End of Summary ---\n")
+
+def print_param_ids(model):
+    print("\n--- Model Parameter IDs ---")
+    for name, param in model.named_parameters():
+        print(f"{name}: id={id(param.data)}, shape={tuple(param.shape)}, device={param.device}")
+    print("--- End ---\n")

@@ -1,34 +1,12 @@
-def cosine_lr(t, T, eta_max, eta_min):
-    if T <= 1:
-        return eta_min  # or eta_max; define your convention
-    cos_inner = math.pi * t / (T - 1)
-    return eta_min + 0.5 * (eta_max - eta_min) * (1 + math.cos(cos_inner))
-
-T = total_updates  # e.g. num_epochs * steps_per_epoch
-
-for t in range(T):  # t is your "global step index"
-    lr = cosine_lr(t, T, eta_max, eta_min)
-    for group in optimizer.param_groups:
-        group["lr"] = lr
-    # run one update (forward/backward/step) here...
-
 import math
-from torch.optim.lr_scheduler import LambdaLR
 
-def min_max_min_cosine_lambda(current_step, total_steps, min_lr, max_lr):
-    # Progress from 0 to 1
-    progress = current_step / total_steps
-    # Cosine curve: goes from min -> max -> min
-    # f(progress) = min_lr + (max_lr - min_lr) * (1 - cos(pi * progress)) / 2
-    return min_lr + (max_lr - min_lr) * (1 - math.cos(math.pi * progress)) / 2
+def cosine_with_warmup(step, warmup_steps, total_steps, base_lr, min_lr):
+    if step < warmup_steps:
+        return base_lr * float(step) / float(max(1, warmup_steps))
 
-# Usage:
-optimizer = ...  # your optimizer
-total_steps = ...  # total number of steps
-min_lr = 1e-5
-max_lr = 1e-3
+    if step >= total_steps:
+        return min_lr
 
-scheduler = LambdaLR(
-    optimizer,
-    lr_lambda=lambda step: min_max_min_cosine_lambda(step, total_steps, min_lr, max_lr) / max_lr
-)
+    progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return min_lr + (base_lr - min_lr) * cosine
