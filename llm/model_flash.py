@@ -111,8 +111,8 @@ class TransformerBlock(nn.Module):
         debug_rms=False,
         debug_branch=False,
         use_rezero=True,     
-        branch_scale=1.0,    
-        alpha_init=0.0,      
+        atten_init=0.0,
+        mlp_init=0.0,     
     ):
         super().__init__()
 
@@ -123,14 +123,15 @@ class TransformerBlock(nn.Module):
         self.mlp  = SwiGLU(d_model, d_ff)
 
         self.use_rezero   = use_rezero
-        self.branch_scale = branch_scale
 
         if use_rezero:
-            self.alpha_attn = nn.Parameter(torch.full((1,), alpha_init))
-            self.alpha_mlp  = nn.Parameter(torch.full((1,), alpha_init))
+            self.alpha_attn = nn.Parameter(torch.full((1,), atten_init))
+            self.alpha_mlp  = nn.Parameter(torch.full((1,), mlp_init))
+            self.beta = nn.Parameter(torch.ones((1,))) 
         else:
             self.register_buffer("alpha_attn", torch.tensor(1.0))
             self.register_buffer("alpha_mlp",  torch.tensor(1.0))
+            self.register_buffer("beta",       torch.tensor(1.0))
 
         self.debug_rms = debug_rms
         self.debug_branch = debug_branch 
@@ -148,13 +149,10 @@ class TransformerBlock(nn.Module):
         attn_out = self.attn(self.attn_norm(x), attn_mask=attn_mask)
         mlp_out  = self.mlp(self.mlp_norm(x))
 
-        attn_scale = self.branch_scale * self.alpha_attn
-        mlp_scale  = self.branch_scale * self.alpha_mlp
+        attn_delta = self.alpha_attn * attn_out
+        mlp_delta  = self.alpha_mlp  * mlp_out
 
-        attn_delta = attn_scale * attn_out
-        mlp_delta  = mlp_scale  * mlp_out
-
-        x_out = x + attn_delta + mlp_delta
+        x_out = x * self.beta + attn_delta + mlp_delta
 
         if rm_log:
             print(f"[RMS] layer_out {self.layer_id}: {rms(x_out):.4f}")
@@ -199,8 +197,8 @@ class TinyDecoder(nn.Module):
                 n_heads,
                 d_ff,
                 self.rotary,
-                branch_scale=branch_scale,
-                alpha_init=1.0,  # effective init ≈ 1/sqrt(2 * n_layers)
+                atten_init=branch_scale,
+                mlp_init=branch_scale / 1.5,
             )
             for _ in range(n_layers)
         ])

@@ -194,7 +194,7 @@ def train_tinydecoder_lm(
 if __name__ == "__main__":
     
     warmup = 11_000
-    rounds = 8
+    rounds = 4
     epochs = 1
     batch_size = 8
     steps_per_round = 248_632 // batch_size

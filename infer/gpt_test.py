@@ -25,11 +25,11 @@ print("Model loaded successfully!")
 def generate_from_ids(
     prompt_ids,
     max_total_tokens=256,
-    temperature=0.7,
-    top_k=50,
-    top_p=0.9,
+    temperature=0.1,
+    top_k=10,
+    top_p=0.98,
     ngram_size=3,
-    repetition_penalty=1.2,
+    repetition_penalty=1.92,
 ):
     """Generate continuation starting from a tensor of token ids."""
     input_ids = prompt_ids.unsqueeze(0).to(device)  # [1, T]
