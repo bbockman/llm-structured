@@ -143,6 +143,9 @@ class TransformerBlock(nn.Module):
         rm_log = self.debug_rms and (not self._debug_done)
         br_log = self.debug_branch and (not self._debug_done)
 
+        beta = self.beta * 4 if self.layer_id == 0 else self.beta
+        x = x * beta
+
         if rm_log:
             print(f"[RMS] layer_in {self.layer_id}: {rms(x):.4f}")
 
@@ -152,7 +155,7 @@ class TransformerBlock(nn.Module):
         attn_delta = self.alpha_attn * attn_out
         mlp_delta  = self.alpha_mlp  * mlp_out
 
-        x_out = x * self.beta + attn_delta + mlp_delta
+        x_out = x + attn_delta + mlp_delta
 
         if rm_log:
             print(f"[RMS] layer_out {self.layer_id}: {rms(x_out):.4f}")
@@ -198,7 +201,7 @@ class TinyDecoder(nn.Module):
                 d_ff,
                 self.rotary,
                 atten_init=branch_scale,
-                mlp_init=branch_scale / 1.5,
+                mlp_init=branch_scale,
             )
             for _ in range(n_layers)
         ])

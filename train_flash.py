@@ -119,17 +119,37 @@ def train_tinydecoder_lm(
                                         attention_mask=attention_mask, 
                                         labels=input_ids)/batch_accum
 
-            if step % 500 == 0:
-                allocated = torch.cuda.memory_allocated(device) / 1024**3
-                reserved = torch.cuda.memory_reserved(device) / 1024**3
-                print(f"Round {round} Step {step} Loss: {loss.item() * batch_accum:.4f} | "
-                      f"Mem: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved | "
-                      f"Batch: {(time.perf_counter() - inc_time)*(batch_accum):.2f}s")
-                inc_time = time.perf_counter()
-
             scaler.scale(loss).backward()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if step % 500 == 0:
+                total_norm = 0.0
+                for p in model.parameters():
+                    if p.grad is None:
+                        continue
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+                total_norm = total_norm ** 0.5
+
+                allocated = torch.cuda.memory_allocated(device) / 1024**3
+                reserved = torch.cuda.memory_reserved(device) / 1024**3
+                print(f"Round {round} Epoch {epoch+1} Step {step} Loss: {loss.item() * batch_accum:.4f} | "
+                      f"Mem: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved | "
+                      f"Batch: {(time.perf_counter() - inc_time)*(batch_accum):.2f}s | "
+                      f"Grad Norm: {total_norm:.3f}")
+                inc_time = time.perf_counter()
+            
+            if warmup is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                if not torch.isfinite(loss):
+                    print("Non‑finite loss at step", step)
+                    optimizer.zero_grad()
+                    continue
+                for p in model.parameters():
+                    if p.grad is not None and not torch.isfinite(p.grad).all():
+                        print("Non‑finite grad at step", step)
+                        optimizer.zero_grad()
+                        break
+
 
             running_loss += loss.item() * batch_accum
 
@@ -194,14 +214,14 @@ def train_tinydecoder_lm(
 if __name__ == "__main__":
     
     warmup = 11_000
-    rounds = 4
-    epochs = 1
+    rounds = 2
+    epochs = 4
     batch_size = 8
     steps_per_round = 248_632 // batch_size
     batch_accum = 6
     num_shards = 1
     lr_base = 1e-4
-    total_steps = steps_per_round * rounds + warmup
+    total_steps = steps_per_round * rounds * epochs + warmup
 
     train_tinydecoder_lm(epochs=1,batch_size=batch_size,batch_accum=batch_accum,lr=lr_base,warmup=WARMUP, round=0,
                          save_path="disk/models/llm-scoped/warmup.pth")
@@ -212,9 +232,9 @@ if __name__ == "__main__":
         batch_accum=batch_accum,
         lr=lr_base,
         load_path="disk/models/llm-scoped/warmup.pth",
-        save_path="disk/models/llm-scoped/params_500autocast.pth",
+        save_path="disk/models/llm-scoped/params_snap.pth",
         total_steps=total_steps,
-        start_shard=0,
+        start_shard=0,  
         num_shards=num_shards,
         round=1
     )
@@ -229,8 +249,8 @@ if __name__ == "__main__":
             batch_size=batch_size,
             batch_accum=batch_accum,
             lr=lr_base,
-            load_path="disk/models/llm-scoped/params_500autocast.pth",
-            save_path="disk/models/llm-scoped/params_500autocast.pth",
+            load_path="disk/models/llm-scoped/params_snap.pth",
+            save_path="disk/models/llm-scoped/params_snap.pth",
             total_steps=total_steps,
             start_shard=next_shard,
             num_shards=num_shards,

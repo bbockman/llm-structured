@@ -22,7 +22,18 @@ def count_parameters(model):
 def rms(x):
     with torch.no_grad():
         return x.pow(2).mean().sqrt().item()
-    
+
+def norm_ratio(layer_id, attn_delta, mlp_delta):
+    with torch.no_grad():
+        # (B, T, D) -> (B*T, D) -> mean L2 per token
+        attn_delta = attn_delta.flatten(0, 1).norm(dim=-1).mean().item()
+        mlp_delta  = mlp_delta.flatten(0, 1).norm(dim=-1).mean().item()
+        ratio = mlp_delta / (attn_delta + 1e-8)
+        print(
+            f"[Δ] layer {layer_id}: "
+            f"attn={attn_delta:.4f}, mlp={mlp_delta:.4f}, ratio={ratio:.2f}"
+        )
+
 def get_tensor_memory():
     import gc
     import torch
